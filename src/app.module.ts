@@ -8,6 +8,7 @@ import { DepositModule } from './modules/deposit/deposit.module.js';
 import { IdempotencyModule } from './modules/idempotency/idempotency.module.js';
 import { LedgerModule } from './modules/ledger/ledger.module.js';
 import { ProvidersModule } from './modules/providers/providers.module.js';
+import { TransferModule } from './modules/transfer/transfer.module.js';
 import { WalletModule } from './modules/wallet/wallet.module.js';
 import { WithdrawalModule } from './modules/withdrawal/withdrawal.module.js';
 
@@ -26,6 +27,7 @@ import { WithdrawalModule } from './modules/withdrawal/withdrawal.module.js';
     ProvidersModule,
     DepositModule,
     WithdrawalModule,
+    TransferModule,
   ],
 })
 export class AppModule {}
