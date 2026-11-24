@@ -183,8 +183,7 @@ export class ReconciliationService {
           localAmount:
             localIrt !== null ? formatMinorToApi(localIrt, 'IRT') : null,
           depositId: match?.id ?? null,
-          details:
-            'PSP settlement CSV deposit row has non-positive IRR amount',
+          details: 'PSP settlement CSV deposit row has non-positive IRR amount',
         },
       };
     }

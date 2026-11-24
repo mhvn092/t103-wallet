@@ -105,4 +105,3 @@ export class InternalOpsController {
     return this._internalOpsService.getMetrics();
   }
 }
-

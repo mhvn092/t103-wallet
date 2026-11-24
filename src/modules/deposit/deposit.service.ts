@@ -4,7 +4,11 @@ import { and, asc, eq, inArray, lte, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
-import { addJitterMs } from '../../common/utils/backoff.js';
+import {
+  addJitterMs,
+  addPositiveJitterMs,
+  computeSafeLeaseMs,
+} from '../../common/utils/backoff.js';
 import { parseAmountToMinor } from '../../common/utils/money.js';
 import { assertValidUuid } from '../../common/utils/uuid-validation.js';
 import { generateUuidV7 } from '../../common/utils/uuidv7.js';
@@ -62,7 +66,7 @@ export class DepositService {
         scope,
         key: params.idempotencyKey,
         requestBody: params.dto,
-        leaseMs: DEPOSIT_INIT_LEASE_MS,
+        leaseMs: this._getDepositInitLeaseMs(),
       },
     );
     if (claim.kind === 'REPLAY') {
@@ -198,7 +202,7 @@ export class DepositService {
     }
 
     if (inquiry.orderId && inquiry.orderId !== row.orderId) {
-      return this._recordOrderIdMismatchAndReschedule(row, inquiry.orderId);
+      return this._recordOrderIdMismatchAndHaltPolling(row, inquiry.orderId);
     }
 
     if (inquiry.status === 'INIT') {
@@ -245,11 +249,12 @@ export class DepositService {
       }
 
       const ids = dueRows.map((r) => r.id);
+      const pollLeaseMs = this._getPollClaimLeaseMs();
       await tx
         .update(deposits)
         .set({
           nextPollAt: new Date(
-            now.getTime() + addJitterMs(POLL_CLAIM_LEASE_MS),
+            now.getTime() + addPositiveJitterMs(pollLeaseMs),
           ),
           updatedAt: now,
         })
@@ -273,6 +278,27 @@ export class DepositService {
     return claimedIds.length;
   }
 
+  private _getDepositInitLeaseMs(): number {
+    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+      infer: true,
+    });
+    return computeSafeLeaseMs(DEPOSIT_INIT_LEASE_MS, timeoutMs, 1, 10_000);
+  }
+
+  private _getOrphanInitiatedAgeMs(): number {
+    return Math.max(
+      ORPHAN_INITIATED_AGE_MS,
+      this._getDepositInitLeaseMs() + 5_000,
+    );
+  }
+
+  private _getPollClaimLeaseMs(): number {
+    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+      infer: true,
+    });
+    return computeSafeLeaseMs(POLL_CLAIM_LEASE_MS, timeoutMs, 2, 10_000);
+  }
+
   private async _createInitiatedDeposit(
     depositId: string,
     userId: string,
@@ -288,7 +314,7 @@ export class DepositService {
         requestedAmount: amountMinor.toString(),
         orderId,
         status: 'INITIATED',
-        nextPollAt: new Date(now.getTime() + ORPHAN_INITIATED_AGE_MS),
+        nextPollAt: new Date(now.getTime() + this._getOrphanInitiatedAgeMs()),
       })
       .returning();
 
@@ -426,7 +452,10 @@ export class DepositService {
     row: DepositRow,
   ): Promise<DepositDetailResponseDto> {
     const ageMs = Date.now() - row.createdAt.getTime();
-    if (row.status === 'INITIATED' && ageMs >= ORPHAN_INITIATED_AGE_MS) {
+    if (
+      row.status === 'INITIATED' &&
+      ageMs >= this._getOrphanInitiatedAgeMs()
+    ) {
       return this._markDepositFailedIfUnsettled(row, null);
     }
     return this._toDetailDto(row);
@@ -472,29 +501,41 @@ export class DepositService {
     return new Date(Math.min(graceDeadlineMs, nowMs + addJitterMs(stepBaseMs)));
   }
 
-  private async _recordOrderIdMismatchAndReschedule(
+  private async _recordOrderIdMismatchAndHaltPolling(
     row: DepositRow,
     actualOrderId: string,
   ): Promise<DepositDetailResponseDto> {
     this._logger.error(
       `PSP orderId mismatch on deposit=${row.id}: expected=${row.orderId} actual=${actualOrderId}`,
     );
-    await this._database.db.insert(financialDiscrepancies).values({
-      id: generateUuidV7(),
-      referenceType: 'DEPOSIT',
-      referenceId: row.id,
-      userId: row.userId,
-      discrepancyType: 'ORDER_ID_MISMATCH',
-      amount: row.requestedAmount,
-      currency: 'IRT',
-      providerPayload: {
-        expectedOrderId: row.orderId,
-        actualOrderId,
-        pspToken: row.pspToken,
-      },
-      status: 'OPEN',
+    await this._database.db
+      .insert(financialDiscrepancies)
+      .values({
+        id: generateUuidV7(),
+        referenceType: 'DEPOSIT',
+        referenceId: row.id,
+        userId: row.userId,
+        discrepancyType: 'ORDER_ID_MISMATCH',
+        amount: row.requestedAmount,
+        currency: 'IRT',
+        providerPayload: {
+          expectedOrderId: row.orderId,
+          actualOrderId,
+          pspToken: row.pspToken,
+        },
+        status: 'OPEN',
+      })
+      .onConflictDoNothing({
+        target: [
+          financialDiscrepancies.referenceType,
+          financialDiscrepancies.referenceId,
+          financialDiscrepancies.discrepancyType,
+        ],
+      });
+    return this._updateUnsettledDeposit(row, {
+      status: row.status,
+      nextPollAt: null,
     });
-    return this._reschedulePoll(row, row.status);
   }
 
   private async _reschedulePoll(
@@ -656,23 +697,32 @@ export class DepositService {
         .returning();
 
       if (amountMismatch) {
-        await tx.insert(financialDiscrepancies).values({
-          id: generateUuidV7(),
-          referenceType: 'DEPOSIT',
-          referenceId: locked.id,
-          userId: locked.userId,
-          discrepancyType: 'AMOUNT_MISMATCH',
-          amount: params.verifiedAmountIrt.toString(),
-          currency: 'IRT',
-          providerPayload: {
-            requestedAmount: locked.requestedAmount,
-            verifiedAmount: params.verifiedAmountIrt.toString(),
-            hasIrrRemainder: params.hasIrrRemainder,
-            pspToken: locked.pspToken,
-            pspRefId: params.pspRefId,
-          },
-          status: 'OPEN',
-        });
+        await tx
+          .insert(financialDiscrepancies)
+          .values({
+            id: generateUuidV7(),
+            referenceType: 'DEPOSIT',
+            referenceId: locked.id,
+            userId: locked.userId,
+            discrepancyType: 'AMOUNT_MISMATCH',
+            amount: params.verifiedAmountIrt.toString(),
+            currency: 'IRT',
+            providerPayload: {
+              requestedAmount: locked.requestedAmount,
+              verifiedAmount: params.verifiedAmountIrt.toString(),
+              hasIrrRemainder: params.hasIrrRemainder,
+              pspToken: locked.pspToken,
+              pspRefId: params.pspRefId,
+            },
+            status: 'OPEN',
+          })
+          .onConflictDoNothing({
+            target: [
+              financialDiscrepancies.referenceType,
+              financialDiscrepancies.referenceId,
+              financialDiscrepancies.discrepancyType,
+            ],
+          });
       }
 
       return updated ?? locked;

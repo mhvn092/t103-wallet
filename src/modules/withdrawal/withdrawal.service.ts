@@ -1,12 +1,14 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, asc, eq, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   addJitterMs,
+  addPositiveJitterMs,
   computeJitteredBackoffMs,
+  computeSafeLeaseMs,
 } from '../../common/utils/backoff.js';
 import { assertValidDestination } from '../../common/utils/destination-validator.js';
 import {
@@ -397,11 +399,12 @@ export class WithdrawalService {
       }
 
       const ids = due.map((d) => d.id);
+      const pollLeaseMs = this._getProcessingPollLeaseMs();
       await tx
         .update(withdrawals)
         .set({
           nextPollAt: new Date(
-            now.getTime() + addJitterMs(PROCESSING_POLL_LEASE_MS),
+            now.getTime() + addPositiveJitterMs(pollLeaseMs),
           ),
           updatedAt: now,
         })
@@ -481,11 +484,25 @@ export class WithdrawalService {
     return row;
   }
 
+  private _getDispatchLeaseMs(): number {
+    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+      infer: true,
+    });
+    return computeSafeLeaseMs(DISPATCH_LEASE_MS, timeoutMs, 2, 15_000);
+  }
+
+  private _getProcessingPollLeaseMs(): number {
+    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+      infer: true,
+    });
+    return computeSafeLeaseMs(PROCESSING_POLL_LEASE_MS, timeoutMs, 1, 10_000);
+  }
+
   private async _claimDispatchBatch(
     limit: number,
   ): Promise<ClaimedDispatchItem[]> {
     const now = new Date();
-    const leaseUntil = new Date(now.getTime() + DISPATCH_LEASE_MS);
+    const leaseUntil = new Date(now.getTime() + this._getDispatchLeaseMs());
 
     return this._database.runInTransaction(async (tx) => {
       const candidates = await tx
@@ -558,6 +575,14 @@ export class WithdrawalService {
       }
     }
 
+    await this._submitCreateTransfer(row, claimedVersion, slaMs);
+  }
+
+  private async _submitCreateTransfer(
+    row: WithdrawalRow,
+    claimedVersion: bigint,
+    slaMs: number,
+  ): Promise<void> {
     const ccy: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
     const result = await this._payoutClient.createTransfer({
       requestId: row.providerRequestId,
@@ -705,6 +730,17 @@ export class WithdrawalService {
         return;
       }
 
+      if (inquiry.kind === 'NOT_FOUND' && row.status === 'MANUAL_REVIEW') {
+        if (row.providerRefId !== null) {
+          this._logger.warn(
+            `Payout returned 404 for previously accepted MANUAL_REVIEW withdrawal=${row.id} ref=${row.providerRefId}; keeping in MANUAL_REVIEW for ops triage`,
+          );
+          return;
+        }
+        await this._redispatchUnacceptedManualReview(row, slaMs);
+        return;
+      }
+
       if (
         row.status === 'PROCESSING' &&
         Date.now() - row.createdAt.getTime() >= slaMs
@@ -720,11 +756,44 @@ export class WithdrawalService {
     }
   }
 
+  private async _redispatchUnacceptedManualReview(
+    row: WithdrawalRow,
+    slaMs: number,
+  ): Promise<void> {
+    const now = new Date();
+    const leaseUntil = new Date(now.getTime() + this._getDispatchLeaseMs());
+    const [claimed] = await this._database.db
+      .update(withdrawals)
+      .set({
+        status: 'DISPATCHING',
+        leaseUntil,
+        nextPollAt: null,
+        version: sql`${withdrawals.version} + 1`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(withdrawals.id, row.id),
+          eq(withdrawals.status, 'MANUAL_REVIEW'),
+          isNull(withdrawals.providerRefId),
+          eq(withdrawals.version, row.version),
+        ),
+      )
+      .returning();
+
+    if (!claimed) {
+      return;
+    }
+
+    await this._submitCreateTransfer(claimed, claimed.version, slaMs);
+  }
+
   private async _escalateToManualReview(withdrawalId: string): Promise<void> {
     await this._database.db
       .update(withdrawals)
       .set({
         status: 'MANUAL_REVIEW',
+        version: sql`${withdrawals.version} + 1`,
         updatedAt: new Date(),
       })
       .where(
@@ -1306,24 +1375,33 @@ export class WithdrawalService {
     this._logger.warn(
       `Payout webhook payload mismatch for withdrawal=${row.id} req=${row.providerRequestId}`,
     );
-    await this._database.db.insert(financialDiscrepancies).values({
-      id: generateUuidV7(),
-      referenceType: 'WITHDRAWAL',
-      referenceId: row.id,
-      userId: row.userId,
-      discrepancyType: 'PAYOUT_PAYLOAD_MISMATCH',
-      amount: row.amount,
-      currency: expectedCurrency,
-      providerPayload: {
-        expectedAmount: row.amount,
-        expectedCurrency,
-        providedAmount: payload.amount ?? null,
-        providedCurrency: payload.currency ?? null,
-        status: payload.status ?? null,
-        providerRequestId: row.providerRequestId,
-      },
-      status: 'OPEN',
-    });
+    await this._database.db
+      .insert(financialDiscrepancies)
+      .values({
+        id: generateUuidV7(),
+        referenceType: 'WITHDRAWAL',
+        referenceId: row.id,
+        userId: row.userId,
+        discrepancyType: 'PAYOUT_PAYLOAD_MISMATCH',
+        amount: row.amount,
+        currency: expectedCurrency,
+        providerPayload: {
+          expectedAmount: row.amount,
+          expectedCurrency,
+          providedAmount: payload.amount ?? null,
+          providedCurrency: payload.currency ?? null,
+          status: payload.status ?? null,
+          providerRequestId: row.providerRequestId,
+        },
+        status: 'OPEN',
+      })
+      .onConflictDoNothing({
+        target: [
+          financialDiscrepancies.referenceType,
+          financialDiscrepancies.referenceId,
+          financialDiscrepancies.discrepancyType,
+        ],
+      });
   }
 
   private async _handleLateSuccessConflict(
@@ -1446,22 +1524,31 @@ export class WithdrawalService {
         .where(eq(userRestrictions.userId, locked.userId));
     }
 
-    await tx.insert(financialDiscrepancies).values({
-      id: generateUuidV7(),
-      referenceType: 'WITHDRAWAL',
-      referenceId: locked.id,
-      userId: locked.userId,
-      discrepancyType: 'LATE_SUCCESS_CONFLICT',
-      amount: totalOutflow.toString(),
-      currency: ccy,
-      providerPayload: {
-        providerRequestId: locked.providerRequestId,
-        providerRefId: meta.providerRefId,
-        clawback: clawback.toString(),
-        shortfall: shortfall.toString(),
-      },
-      status: 'OPEN',
-    });
+    await tx
+      .insert(financialDiscrepancies)
+      .values({
+        id: generateUuidV7(),
+        referenceType: 'WITHDRAWAL',
+        referenceId: locked.id,
+        userId: locked.userId,
+        discrepancyType: 'LATE_SUCCESS_CONFLICT',
+        amount: totalOutflow.toString(),
+        currency: ccy,
+        providerPayload: {
+          providerRequestId: locked.providerRequestId,
+          providerRefId: meta.providerRefId,
+          clawback: clawback.toString(),
+          shortfall: shortfall.toString(),
+        },
+        status: 'OPEN',
+      })
+      .onConflictDoNothing({
+        target: [
+          financialDiscrepancies.referenceType,
+          financialDiscrepancies.referenceId,
+          financialDiscrepancies.discrepancyType,
+        ],
+      });
 
     return updated ?? locked;
   }

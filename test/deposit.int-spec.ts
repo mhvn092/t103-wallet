@@ -540,6 +540,31 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
     await depositService.verifyDeposit(depositId);
     expect(mockPspClient.verifyPayment).not.toHaveBeenCalled();
 
+    // R-02: ORDER_ID_MISMATCH halts polling (next_poll_at = NULL) and deduplicates discrepancy rows
+    const { rows: haltedRows } = await database.pool.query<{
+      next_poll_at: Date | null;
+    }>(`SELECT next_poll_at FROM deposits WHERE id = $1`, [depositId]);
+    expect(haltedRows[0]?.next_poll_at).toBeNull();
+    expect(await depositService.pollPendingDeposits(10)).toBe(0);
+
+    mockPspClient.getPaymentStatus.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'PAID',
+      amountIrt: 50_000n,
+      refId: 'REF-BAD-ORD',
+      orderId: 'dep_wrong_order',
+    });
+    await depositService.verifyDeposit(depositId);
+    const { rows: mismatchDedupRows } = await database.pool.query<{
+      discrepancy_type: string;
+    }>(
+      `SELECT discrepancy_type FROM financial_discrepancies WHERE reference_id = $1`,
+      [depositId],
+    );
+    expect(mismatchDedupRows).toEqual([
+      { discrepancy_type: 'ORDER_ID_MISMATCH' },
+    ]);
+
     // Next attempt returns matching orderId and hasIrrRemainder: true -> logs AMOUNT_MISMATCH even if IRT integer matches
     mockPspClient.getPaymentStatus.mockResolvedValueOnce({
       kind: 'FOUND',

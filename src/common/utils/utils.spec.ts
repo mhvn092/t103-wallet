@@ -1,5 +1,6 @@
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { addPositiveJitterMs, computeSafeLeaseMs } from './backoff.js';
 import { sha256CanonicalJson } from './canonical-json.js';
 import { getTehranDateString } from './tehran-date.js';
 import { generateUuidV7 } from './uuidv7.js';
@@ -46,5 +47,18 @@ describe('core utilities (uuidv7, canonical-json, tehran-date)', () => {
     expect(getTehranDateString(new Date('2026-11-23T20:30:00Z'))).toBe(
       '2026-11-24',
     );
+  });
+
+  it('scales worker leases strictly above PROVIDER_HTTP_TIMEOUT_MS and applies non-shrinking jitter', () => {
+    expect(computeSafeLeaseMs(45_000, 10_000, 2, 15_000)).toBe(45_000);
+    expect(computeSafeLeaseMs(45_000, 60_000, 2, 15_000)).toBe(135_000);
+    expect(computeSafeLeaseMs(15_000, 60_000, 1, 10_000)).toBe(70_000);
+
+    for (let i = 0; i < 20; i += 1) {
+      const jittered = addPositiveJitterMs(70_000, 0.2);
+      expect(jittered).toBeGreaterThanOrEqual(70_000);
+      expect(jittered).toBeLessThanOrEqual(84_000);
+    }
+    expect(addPositiveJitterMs(0)).toBe(0);
   });
 });

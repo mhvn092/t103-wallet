@@ -11,6 +11,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -146,7 +147,7 @@ export const financialDiscrepancies = pgTable(
     referenceType: text('reference_type').notNull(), // 'DEPOSIT' | 'WITHDRAWAL'
     referenceId: uuid('reference_id').notNull(),
     userId: text('user_id').notNull(),
-    discrepancyType: text('discrepancy_type').notNull(), // 'AMOUNT_MISMATCH' | 'LATE_SUCCESS_CONFLICT'
+    discrepancyType: text('discrepancy_type').notNull(), // 'AMOUNT_MISMATCH' | 'ORDER_ID_MISMATCH' | 'PAYOUT_PAYLOAD_MISMATCH' | 'LATE_SUCCESS_CONFLICT'
     amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
     currency: text('currency').notNull(),
     providerPayload: jsonb('provider_payload')
@@ -160,6 +161,11 @@ export const financialDiscrepancies = pgTable(
   },
   (t) => [
     index('financial_discrepancies_user_status_idx').on(t.userId, t.status),
+    uniqueIndex('financial_discrepancies_ref_type_uq').on(
+      t.referenceType,
+      t.referenceId,
+      t.discrepancyType,
+    ),
   ],
 );
 

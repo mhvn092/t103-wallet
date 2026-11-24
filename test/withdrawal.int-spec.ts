@@ -1108,4 +1108,162 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
 
     await assertGlobalFinancialInvariants(database.pool);
   });
+
+  it('recovers unaccepted MANUAL_REVIEW withdrawals on 404 via fenced CAS without duplicate POSTs and skips already-accepted rows (R-01, R-02)', async () => {
+    const userId = `user_${faker.string.alphanumeric(8)}`;
+    await fundUserViaAdjustment({
+      app,
+      userId,
+      currency: 'IRT',
+      amount: '300000',
+      idempotencyKey: `fund-r01-${faker.string.uuid()}`,
+    });
+
+    // 1. Unaccepted withdrawal hits 35-minute 503 outage -> escalated to MANUAL_REVIEW with provider_ref_id IS NULL
+    const wd1Res = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-r01-unaccepted-${faker.string.uuid()}`)
+      .send({
+        userId,
+        currency: 'IRT',
+        amount: '100000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+    const wd1Id = wd1Res.body.withdrawalId as string;
+    const req1Id = wd1Res.body.providerRequestId as string;
+
+    await database.pool.query(
+      `UPDATE withdrawals SET created_at = NOW() - INTERVAL '35 minutes' WHERE id = $1`,
+      [wd1Id],
+    );
+
+    mockPayoutClient.createTransfer.mockResolvedValueOnce({
+      kind: 'AMBIGUOUS',
+      reason: 'HTTP 503 outage',
+    });
+    await withdrawalService.dispatchPendingBatch();
+
+    const escalated1 = await request(app.getHttpServer())
+      .get(`/withdrawals/${wd1Id}`)
+      .expect(200);
+    expect(escalated1.body.status).toBe('MANUAL_REVIEW');
+    expect(escalated1.body.providerRefId).toBeNull();
+
+    // Payout recovers: getTransfer -> 404 NOT_FOUND, createTransfer -> ACCEPTED (held behind barrier)
+    await database.pool.query(
+      `UPDATE withdrawals SET next_poll_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
+      [wd1Id],
+    );
+
+    let markCreateInFlight!: () => void;
+    const createInFlight = new Promise<void>((resolve) => {
+      markCreateInFlight = resolve;
+    });
+    let releaseCreate!: () => void;
+    const createBarrier = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({ kind: 'NOT_FOUND' });
+    mockPayoutClient.createTransfer.mockImplementationOnce(async () => {
+      markCreateInFlight();
+      await createBarrier;
+      return { kind: 'ACCEPTED', trackingId: 'TRK-R01-OK' };
+    });
+
+    const pollPromise = withdrawalService.pollProcessingBatch();
+    await createInFlight;
+
+    // While createTransfer is in flight, row is fenced in DISPATCHING with lease > timeout and concurrent workers cannot double-POST
+    const { rows: midRows } = await database.pool.query<{
+      status: string;
+      lease_until: Date | null;
+      next_poll_at: Date | null;
+    }>(
+      `SELECT status, lease_until, next_poll_at FROM withdrawals WHERE id = $1`,
+      [wd1Id],
+    );
+    expect(midRows[0]?.status).toBe('DISPATCHING');
+    expect(midRows[0]?.next_poll_at).toBeNull();
+    expect(midRows[0]?.lease_until?.getTime()).toBeGreaterThan(
+      Date.now() + 10_000,
+    );
+
+    await withdrawalService.pollProcessingBatch();
+    await withdrawalService.dispatchPendingBatch();
+    expect(mockPayoutClient.createTransfer).toHaveBeenCalledTimes(2);
+
+    releaseCreate();
+    await pollPromise;
+
+    expect(mockPayoutClient.createTransfer).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ requestId: req1Id }),
+    );
+    const recovered1 = await request(app.getHttpServer())
+      .get(`/withdrawals/${wd1Id}`)
+      .expect(200);
+    expect(recovered1.body.status).toBe('PROCESSING');
+    expect(recovered1.body.providerRefId).toBe('TRK-R01-OK');
+
+    const rawSuccess1 = JSON.stringify({
+      requestId: req1Id,
+      status: 'SUCCEEDED',
+      refId: 'REF-R01-1',
+    });
+    await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', signPayoutPayload(rawSuccess1, webhookSecret))
+      .send(rawSuccess1)
+      .expect(200);
+
+    // 2. Previously accepted withdrawal (providerRefId !== null) in MANUAL_REVIEW must NOT re-POST on 404
+    const wd2Res = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-r01-accepted-${faker.string.uuid()}`)
+      .send({
+        userId,
+        currency: 'IRT',
+        amount: '100000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+    const wd2Id = wd2Res.body.withdrawalId as string;
+
+    mockPayoutClient.createTransfer.mockResolvedValueOnce({
+      kind: 'ACCEPTED',
+      trackingId: 'TRK-EXISTING',
+    });
+    await withdrawalService.dispatchPendingBatch();
+
+    await database.pool.query(
+      `UPDATE withdrawals SET created_at = NOW() - INTERVAL '35 minutes', next_poll_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
+      [wd2Id],
+    );
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'PROCESSING',
+      providerRefId: 'TRK-EXISTING',
+      failureReason: null,
+    });
+    await withdrawalService.pollProcessingBatch();
+
+    await database.pool.query(
+      `UPDATE withdrawals SET next_poll_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
+      [wd2Id],
+    );
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({ kind: 'NOT_FOUND' });
+    await withdrawalService.pollProcessingBatch();
+
+    expect(mockPayoutClient.createTransfer).toHaveBeenCalledTimes(3);
+    const stillManual = await request(app.getHttpServer())
+      .get(`/withdrawals/${wd2Id}`)
+      .expect(200);
+    expect(stillManual.body.status).toBe('MANUAL_REVIEW');
+    expect(stillManual.body.providerRefId).toBe('TRK-EXISTING');
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
 });

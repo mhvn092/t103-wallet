@@ -25,6 +25,31 @@ export const envSchema = z.object({
       /^postgres(?:ql)?:\/\//i,
       'DATABASE_URI must use postgres:// or postgresql:// scheme',
     ),
+  MIGRATION_DATABASE_URI: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .min(1)
+      .regex(
+        /^postgres(?:ql)?:\/\//i,
+        'MIGRATION_DATABASE_URI must use postgres:// or postgresql:// scheme',
+      )
+      .optional(),
+  ),
+  POSTGRES_APP_USER: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .regex(
+        /^[a-z_][a-z0-9_]{0,62}$/,
+        'POSTGRES_APP_USER must be a valid PostgreSQL identifier',
+      )
+      .optional(),
+  ),
+  POSTGRES_APP_PASSWORD: z.preprocess(
+    emptyToUndefined,
+    z.string().min(1).optional(),
+  ),
   RABBITMQ_URI: z
     .string()
     .min(1)
@@ -104,6 +129,12 @@ export const envSchema = z.object({
     .min(1000)
     .max(86_400_000)
     .default(300_000),
+  DRIFT_AUDIT_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .max(86_400_000)
+    .default(60_000),
   PROVIDER_HTTP_TIMEOUT_MS: z.coerce
     .number()
     .int()

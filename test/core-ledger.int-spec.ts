@@ -3,7 +3,15 @@ import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import { generateUuidV7 } from '../src/common/utils/uuidv7.js';
@@ -308,6 +316,7 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
       .expect(200);
     expect(walletGenerated.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
 
+    const poolQuerySpy = vi.spyOn(database.pool, 'query');
     const metricsRes = await request(app.getHttpServer())
       .get('/internal/metrics')
       .expect(200);
@@ -318,6 +327,24 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
       balanceDriftAccounts: 0,
       pausedWithdrawalCurrencies: [],
     });
+
+    const driftQueriesAfterFirst = poolQuerySpy.mock.calls.filter(
+      ([sqlText]) =>
+        typeof sqlText === 'string' &&
+        sqlText.includes('LEFT JOIN ledger_items'),
+    ).length;
+
+    const cachedMetricsRes = await request(app.getHttpServer())
+      .get('/internal/metrics')
+      .expect(200);
+    expect(cachedMetricsRes.body.balanceDriftAccounts).toBe(0);
+    const driftQueriesAfterSecond = poolQuerySpy.mock.calls.filter(
+      ([sqlText]) =>
+        typeof sqlText === 'string' &&
+        sqlText.includes('LEFT JOIN ledger_items'),
+    ).length;
+    expect(driftQueriesAfterSecond).toBe(driftQueriesAfterFirst);
+    poolQuerySpy.mockRestore();
 
     await database.pool.query(
       `INSERT INTO idempotency_keys (scope, key, request_hash, status, expires_at)

@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { eq, sql } from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
@@ -8,6 +9,7 @@ import {
   parseAmountToMinor,
 } from '../../common/utils/money.js';
 import { generateUuidV7 } from '../../common/utils/uuidv7.js';
+import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import {
   financialDiscrepancies,
@@ -37,6 +39,7 @@ const PAUSED_WITHDRAWALS_CONTROL_KEY = 'withdrawals_paused_currencies';
 @Injectable()
 export class InternalOpsService {
   constructor(
+    private readonly _config: ConfigService<EnvConfig, true>,
     private readonly _database: DatabaseService,
     private readonly _idempotency: IdempotencyService,
     private readonly _walletService: WalletService,
@@ -136,8 +139,7 @@ export class InternalOpsService {
         });
 
         const remainingReceivable = receivable - settleAmount;
-        const allCleared =
-          remainingReceivable === 0n && otherReceivable === 0n;
+        const allCleared = remainingReceivable === 0n && otherReceivable === 0n;
         const nextFrozen = allCleared ? false : frozen;
 
         if (frozen && allCleared) {
@@ -199,12 +201,47 @@ export class InternalOpsService {
     };
   }
 
+  async refreshBalanceDriftGauge(): Promise<number> {
+    if (this._driftRefreshInFlight) {
+      return this._driftRefreshInFlight;
+    }
+
+    const refreshPromise = this._database.pool
+      .query<{ drift_count: number }>(
+        `
+        SELECT COUNT(*)::int AS drift_count FROM (
+          SELECT a.id
+          FROM accounts a
+          LEFT JOIN ledger_items li ON li.account_id = a.id
+          WHERE a.owner_type = 'USER'
+          GROUP BY a.id, a.balance
+          HAVING a.balance IS DISTINCT FROM COALESCE(
+            SUM(CASE WHEN li.direction = a.normal_side THEN li.amount ELSE -li.amount END),
+            0
+          )
+        ) drift
+      `,
+      )
+      .then((res) => {
+        const count = res.rows[0]?.drift_count ?? 0;
+        this._cachedDriftCount = count;
+        this._cachedDriftComputedAtMs = Date.now();
+        return count;
+      })
+      .finally(() => {
+        this._driftRefreshInFlight = null;
+      });
+
+    this._driftRefreshInFlight = refreshPromise;
+    return refreshPromise;
+  }
+
   async getMetrics(): Promise<InternalMetricsResponseDto> {
     const [
       openDiscrepancyRow,
       manualReviewRow,
       pendingOutboxRow,
-      driftRes,
+      driftCount,
       pauseControl,
     ] = await Promise.all([
       this._database.db
@@ -219,19 +256,7 @@ export class InternalOpsService {
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(outboxEvents)
         .where(eq(outboxEvents.status, 'PENDING')),
-      this._database.pool.query<{ drift_count: number }>(`
-        SELECT COUNT(*)::int AS drift_count FROM (
-          SELECT a.id
-          FROM accounts a
-          LEFT JOIN ledger_items li ON li.account_id = a.id
-          WHERE a.owner_type = 'USER'
-          GROUP BY a.id, a.balance
-          HAVING a.balance IS DISTINCT FROM COALESCE(
-            SUM(CASE WHEN li.direction = a.normal_side THEN li.amount ELSE -li.amount END),
-            0
-          )
-        ) drift
-      `),
+      this._getCachedBalanceDriftAccounts(),
       this._database.db
         .select({ value: systemControls.value })
         .from(systemControls)
@@ -250,9 +275,32 @@ export class InternalOpsService {
       openDiscrepancies: openDiscrepancyRow[0]?.count ?? 0,
       manualReviewWithdrawals: manualReviewRow[0]?.count ?? 0,
       pendingOutboxEvents: pendingOutboxRow[0]?.count ?? 0,
-      balanceDriftAccounts: driftRes.rows[0]?.drift_count ?? 0,
+      balanceDriftAccounts: driftCount,
       pausedWithdrawalCurrencies,
     };
+  }
+
+  private _getCachedBalanceDriftAccounts(): Promise<number> {
+    const intervalMs = this._config.get('DRIFT_AUDIT_INTERVAL_MS', {
+      infer: true,
+    });
+    const workersEnabled = this._config.get('WORKERS_ENABLED', {
+      infer: true,
+    });
+    const isFresh =
+      this._cachedDriftCount !== null &&
+      Date.now() - this._cachedDriftComputedAtMs < intervalMs;
+
+    if (isFresh && this._cachedDriftCount !== null) {
+      return Promise.resolve(this._cachedDriftCount);
+    }
+
+    if (this._cachedDriftCount !== null && workersEnabled) {
+      void this.refreshBalanceDriftGauge().catch(() => undefined);
+      return Promise.resolve(this._cachedDriftCount);
+    }
+
+    return this.refreshBalanceDriftGauge();
   }
 
   private _resolveSettlementAmount(
@@ -297,5 +345,8 @@ export class InternalOpsService {
 
     return available < receivable ? available : receivable;
   }
-}
 
+  private _cachedDriftCount: number | null = null;
+  private _cachedDriftComputedAtMs = 0;
+  private _driftRefreshInFlight: Promise<number> | null = null;
+}
