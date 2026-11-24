@@ -9,6 +9,7 @@ import { IdempotencyModule } from './modules/idempotency/idempotency.module.js';
 import { LedgerModule } from './modules/ledger/ledger.module.js';
 import { ProvidersModule } from './modules/providers/providers.module.js';
 import { WalletModule } from './modules/wallet/wallet.module.js';
+import { WithdrawalModule } from './modules/withdrawal/withdrawal.module.js';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { WalletModule } from './modules/wallet/wallet.module.js';
     AdjustmentModule,
     ProvidersModule,
     DepositModule,
+    WithdrawalModule,
   ],
 })
 export class AppModule {}

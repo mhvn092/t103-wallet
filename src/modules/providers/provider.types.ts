@@ -19,7 +19,7 @@ export type PayoutCreateResult =
   | { kind: 'PERMANENT_REJECTED'; reason: string }
   | { kind: 'AMBIGUOUS'; reason: string };
 
-type PayoutStatusValue =
+export type PayoutStatusValue =
   'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'RETURNED' | 'REVERSED';
 
 export type PayoutTransferStatusResult =
