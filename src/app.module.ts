@@ -9,6 +9,7 @@ import { IdempotencyModule } from './modules/idempotency/idempotency.module.js';
 import { LedgerModule } from './modules/ledger/ledger.module.js';
 import { OutboxModule } from './modules/outbox/outbox.module.js';
 import { ProvidersModule } from './modules/providers/providers.module.js';
+import { ReconciliationModule } from './modules/reconciliation/reconciliation.module.js';
 import { TransferModule } from './modules/transfer/transfer.module.js';
 import { WalletModule } from './modules/wallet/wallet.module.js';
 import { WithdrawalModule } from './modules/withdrawal/withdrawal.module.js';
@@ -30,6 +31,7 @@ import { WithdrawalModule } from './modules/withdrawal/withdrawal.module.js';
     WithdrawalModule,
     TransferModule,
     OutboxModule,
+    ReconciliationModule,
   ],
 })
 export class AppModule {}

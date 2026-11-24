@@ -210,5 +210,40 @@ export class PspClient {
     };
   }
 
+  async fetchSettlementCsv(date: string): Promise<string> {
+    const baseUrl = this._config.get('PSP_BASE_URL', { infer: true });
+    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+      infer: true,
+    });
+
+    try {
+      const res = await fetch(
+        `${baseUrl}/psp/settlement?date=${encodeURIComponent(date)}`,
+        {
+          method: 'GET',
+          signal: AbortSignal.timeout(timeoutMs),
+        },
+      );
+      if (!res.ok) {
+        throw new DomainException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          ErrorCode.PROVIDER_UNAVAILABLE,
+          `PSP settlement report returned HTTP ${res.status}`,
+        );
+      }
+      return await res.text();
+    } catch (err) {
+      if (err instanceof DomainException) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      throw new DomainException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        ErrorCode.PROVIDER_UNAVAILABLE,
+        `PSP settlement report request failed: ${message}`,
+      );
+    }
+  }
+
   private readonly _logger = new Logger(PspClient.name);
 }
