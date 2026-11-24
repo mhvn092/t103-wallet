@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-t103}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-t103_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-t103_wallet}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-t103} -d ${POSTGRES_DB:-t103_wallet}"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  simulator:
+    image: hamtapay/t103-simulator:1.0
+    restart: unless-stopped
+    ports:
+      - "${SIMULATOR_PORT:-8080}:8080"
+    environment:
+      SIM_CHAOS: ${SIM_CHAOS:-default}
+      SIM_TIME_SCALE: ${SIM_TIME_SCALE:-1}
+      SIM_PUBLIC_URL: http://simulator:8080
+      PAYOUT_WEBHOOK_URL: http://app:3000/webhooks/payout
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-hamtapay-sim-secret}
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      simulator:
+        condition: service_started
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-t103}:${POSTGRES_PASSWORD:-t103_secret}@postgres:5432/${POSTGRES_DB:-t103_wallet}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      PSP_BASE_URL: http://simulator:8080
+      PAYOUT_BASE_URL: http://simulator:8080
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://app:3000}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-hamtapay-sim-secret}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
+      INTERNAL_ALLOWED_IPS: ${INTERNAL_ALLOWED_IPS:-}
+      MIN_WITHDRAWAL_IRT: ${MIN_WITHDRAWAL_IRT:-100000}
+      MIN_WITHDRAWAL_USDT: ${MIN_WITHDRAWAL_USDT:-10}
+      USDT_WITHDRAWAL_FEE: ${USDT_WITHDRAWAL_FEE:-1}
+      DAILY_LIMIT_IRT: ${DAILY_LIMIT_IRT:-200000000}
+      USDT_IRT_RATE: ${USDT_IRT_RATE:-60000}
+      DEPOSIT_TTL_SECONDS: ${DEPOSIT_TTL_SECONDS:-1800}
+      PROVIDER_HTTP_TIMEOUT_MS: ${PROVIDER_HTTP_TIMEOUT_MS:-10000}
+      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-1000}
+      WORKERS_ENABLED: ${WORKERS_ENABLED:-true}
+
+volumes:
+  pgdata:

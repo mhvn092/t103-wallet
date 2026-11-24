@@ -1,0 +1,26 @@
+# Dependencies & Build
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Logs & OS
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Local Agent Skills & AI Tooling (kept out of repo history)
+.agents/
+.agent/
+.claude/
+.cursor/
+.windsurf/
+skills-lock.json
+AGENTS.md
+GEMINI.md
