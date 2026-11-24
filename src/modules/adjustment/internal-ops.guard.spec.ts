@@ -32,9 +32,20 @@ describe('InternalOpsGuard', () => {
     expect(guard.canActivate(createContext({}))).toBe(true);
   });
 
-  it('fails closed in production when both INTERNAL_API_KEY and INTERNAL_ALLOWED_IPS are unset', () => {
-    const guard = new InternalOpsGuard(makeConfig({ APP_ENV: 'production' }));
-    expect(() => guard.canActivate(createContext({}))).toThrow(/production/);
+  it('fails closed in production when INTERNAL_API_KEY is unset even if IP allowlist is set', () => {
+    const guardNoConfig = new InternalOpsGuard(
+      makeConfig({ APP_ENV: 'production' }),
+    );
+    expect(() => guardNoConfig.canActivate(createContext({}))).toThrow(
+      /production/,
+    );
+
+    const guardIpOnly = new InternalOpsGuard(
+      makeConfig({ APP_ENV: 'production', INTERNAL_ALLOWED_IPS: '127.0.0.1' }),
+    );
+    expect(() => guardIpOnly.canActivate(createContext({}))).toThrow(
+      /INTERNAL_API_KEY/,
+    );
   });
 
   it('enforces timing-safe X-Internal-Api-Key when configured', () => {

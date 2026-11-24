@@ -16,6 +16,20 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService<EnvConfig, true>);
   const isProd = config.get('APP_ENV', { infer: true }) === 'production';
 
+  const trustProxy = config.get('TRUST_PROXY', { infer: true });
+  if (trustProxy !== undefined) {
+    const normalized = trustProxy.toLowerCase();
+    if (normalized === 'true') {
+      app.set('trust proxy', true);
+    } else if (normalized === 'false') {
+      app.set('trust proxy', false);
+    } else if (/^\d+$/.test(normalized)) {
+      app.set('trust proxy', Number(normalized));
+    } else {
+      app.set('trust proxy', trustProxy);
+    }
+  }
+
   app.useLogger(
     new ConsoleLogger({
       json: isProd,

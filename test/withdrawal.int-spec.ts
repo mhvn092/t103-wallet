@@ -923,4 +923,189 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
 
     await assertGlobalFinancialInvariants(database.pool);
   });
+
+  it('scopes withdrawal idempotency per user, supports runtime currency pause/resume, and settles receivables via ops (F-06, F-14, F-15)', async () => {
+    const userA = `wda_${faker.string.alphanumeric(6)}`;
+    const userB = `wdb_${faker.string.alphanumeric(6)}`;
+
+    for (const u of [userA, userB]) {
+      await fundUserViaAdjustment({
+        app,
+        userId: u,
+        currency: 'IRT',
+        amount: '300000',
+        idempotencyKey: `fund-irt-${u}-${faker.string.uuid()}`,
+      });
+    }
+    await fundUserViaAdjustment({
+      app,
+      userId: userA,
+      currency: 'USDT',
+      amount: '30',
+      idempotencyKey: `fund-usdt-${faker.string.uuid()}`,
+    });
+
+    // F-06: Two users with identical Idempotency-Key both succeed
+    const sharedKey = `wd-shared-${faker.string.uuid()}`;
+    const wdARes = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', sharedKey)
+      .send({
+        userId: userA,
+        currency: 'IRT',
+        amount: '150000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+    const wdBRes = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', sharedKey)
+      .send({
+        userId: userB,
+        currency: 'IRT',
+        amount: '150000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+    expect(wdBRes.body.withdrawalId).not.toBe(wdARes.body.withdrawalId);
+
+    // Reusing key with invalid/below-minimum payload returns 422 IDEMPOTENCY_KEY_REUSED
+    const reuseInvalid = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', sharedKey)
+      .send({
+        userId: userA,
+        currency: 'IRT',
+        amount: '50000',
+        destination: 'BAD-IBAN',
+      })
+      .expect(422);
+    expect(reuseInvalid.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    // F-14: Runtime kill-switch pauses USDT withdrawals while keeping IRT active
+    await request(app.getHttpServer())
+      .post('/internal/controls/withdrawals-pause')
+      .send({ currencies: ['USDT'], reason: 'incident containment drill' })
+      .expect(200);
+
+    const pausedUsdt = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-paused-${faker.string.uuid()}`)
+      .send({
+        userId: userA,
+        currency: 'USDT',
+        amount: '10',
+        destination: VALID_TRC20,
+      })
+      .expect(503);
+    expect(pausedUsdt.body.code).toBe('SERVICE_PAUSED');
+
+    // IRT remains operational
+    await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-irt-ok-${faker.string.uuid()}`)
+      .send({
+        userId: userA,
+        currency: 'IRT',
+        amount: '100000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+
+    // Resume all currencies
+    await request(app.getHttpServer())
+      .post('/internal/controls/withdrawals-pause')
+      .send({ currencies: [] })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-resumed-${faker.string.uuid()}`)
+      .send({
+        userId: userA,
+        currency: 'USDT',
+        amount: '10',
+        destination: VALID_TRC20,
+      })
+      .expect(201);
+
+    // F-15: Settle USER:RECEIVABLE shortfall via Ops and lift outbound freeze on userB
+    mockPayoutClient.createTransfer.mockResolvedValueOnce({
+      kind: 'PERMANENT_REJECTED',
+      reason: 'TEMP_GATEWAY_REJECT',
+    });
+    // Fail ALL pending dispatches -> userA + userB get funds released cleanly
+    mockPayoutClient.createTransfer.mockResolvedValue({
+      kind: 'PERMANENT_REJECTED',
+      reason: 'TEMP_GATEWAY_REJECT',
+    });
+    await withdrawalService.dispatchPendingBatch(10);
+
+    // userB transfers all 300k away -> late SUCCEEDED on wdBRes creates 150k RECEIVABLE + freeze
+    await request(app.getHttpServer())
+      .post('/transfers')
+      .set('Idempotency-Key', `xfer-b-out-${faker.string.uuid()}`)
+      .send({
+        fromUserId: userB,
+        toUserId: userA,
+        currency: 'IRT',
+        amount: '300000',
+      })
+      .expect(201);
+
+    const rawLateB = JSON.stringify({
+      requestId: wdBRes.body.providerRequestId as string,
+      status: 'SUCCEEDED',
+      refId: 'REF-SETTLE-OPS',
+    });
+    await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', signPayoutPayload(rawLateB, webhookSecret))
+      .send(rawLateB)
+      .expect(200);
+
+    // Top up userB 200k and settle 150k receivable via Ops
+    await fundUserViaAdjustment({
+      app,
+      userId: userB,
+      currency: 'IRT',
+      amount: '200000',
+      idempotencyKey: `fund-b-repay-${faker.string.uuid()}`,
+    });
+
+    const settleRes = await request(app.getHttpServer())
+      .post('/internal/receivables/settle')
+      .set('Idempotency-Key', `settle-b-${faker.string.uuid()}`)
+      .send({ userId: userB, currency: 'IRT' })
+      .expect(200);
+    expect(settleRes.body).toMatchObject({
+      userId: userB,
+      currency: 'IRT',
+      settledAmount: '150000',
+      remainingReceivable: '0',
+      outboundFrozen: false,
+    });
+
+    // Subsequent withdrawal on userB succeeds with available 50k + fresh deposit
+    await fundUserViaAdjustment({
+      app,
+      userId: userB,
+      currency: 'IRT',
+      amount: '100000',
+      idempotencyKey: `fund-b-ok-${faker.string.uuid()}`,
+    });
+    await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-b-after-${faker.string.uuid()}`)
+      .send({
+        userId: userB,
+        currency: 'IRT',
+        amount: '150000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
 });

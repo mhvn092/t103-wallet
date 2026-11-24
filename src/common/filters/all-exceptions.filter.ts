@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { getCorrelationId } from '../context/request-context.js';
 import { DomainException } from '../errors/domain.exception.js';
 import { ErrorCode, type ErrorCodeValue } from '../errors/error-codes.js';
 
@@ -78,8 +79,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return;
     }
 
+    const correlationId = getCorrelationId();
     this._logger.error(
-      'Unhandled exception',
+      correlationId
+        ? `Unhandled exception [requestId=${correlationId}]`
+        : 'Unhandled exception',
       exception instanceof Error ? exception.stack : String(exception),
     );
     res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({

@@ -109,7 +109,8 @@ export class IdempotencyService {
     requestBody: unknown;
     leaseMs?: number;
   }): Promise<
-    { kind: 'CLAIMED' } | { kind: 'REPLAY'; statusCode: number; body: T }
+    | { kind: 'CLAIMED'; leaseVersion: bigint }
+    | { kind: 'REPLAY'; statusCode: number; body: T }
   > {
     const requestHash = sha256CanonicalJson(params.requestBody);
     const now = new Date();
@@ -125,15 +126,16 @@ export class IdempotencyService {
           requestHash,
           status: 'IN_PROGRESS',
           lockedUntil,
+          leaseVersion: 1n,
           expiresAt,
         })
         .onConflictDoNothing({
           target: [idempotencyKeys.scope, idempotencyKeys.key],
         })
-        .returning();
+        .returning({ leaseVersion: idempotencyKeys.leaseVersion });
 
       if (inserted) {
-        return { kind: 'CLAIMED' };
+        return { kind: 'CLAIMED', leaseVersion: inserted.leaseVersion };
       }
 
       const outcome = await this._resolveExistingRecord<T>({
@@ -150,7 +152,10 @@ export class IdempotencyService {
 
       const reclaimed = await tx
         .update(idempotencyKeys)
-        .set({ lockedUntil })
+        .set({
+          lockedUntil,
+          leaseVersion: sql`${idempotencyKeys.leaseVersion} + 1`,
+        })
         .where(
           and(
             eq(idempotencyKeys.scope, params.scope),
@@ -162,9 +167,10 @@ export class IdempotencyService {
             ),
           ),
         )
-        .returning({ key: idempotencyKeys.key });
+        .returning({ leaseVersion: idempotencyKeys.leaseVersion });
 
-      if (reclaimed.length === 0) {
+      const reclaimedRow = reclaimed[0];
+      if (!reclaimedRow) {
         throw new DomainException(
           HttpStatus.CONFLICT,
           ErrorCode.IDEMPOTENCY_IN_PROGRESS,
@@ -172,19 +178,20 @@ export class IdempotencyService {
         );
       }
 
-      return { kind: 'CLAIMED' };
+      return { kind: 'CLAIMED', leaseVersion: reclaimedRow.leaseVersion };
     });
   }
 
   async completeLeased<T>(params: {
     scope: string;
     key: string;
+    leaseVersion: bigint;
     statusCode: number;
     body: T;
     executor?: DbTransaction;
   }): Promise<void> {
     const db = params.executor ?? this._database.db;
-    await db
+    const updated = await db
       .update(idempotencyKeys)
       .set({
         status: 'COMPLETED',
@@ -196,11 +203,26 @@ export class IdempotencyService {
         and(
           eq(idempotencyKeys.scope, params.scope),
           eq(idempotencyKeys.key, params.key),
+          eq(idempotencyKeys.status, 'IN_PROGRESS'),
+          eq(idempotencyKeys.leaseVersion, params.leaseVersion),
         ),
+      )
+      .returning({ key: idempotencyKeys.key });
+
+    if (updated.length === 0) {
+      throw new DomainException(
+        HttpStatus.CONFLICT,
+        ErrorCode.IDEMPOTENCY_IN_PROGRESS,
+        'Idempotency lease expired or was superseded before completion',
       );
+    }
   }
 
-  async releaseLeased(scope: string, key: string): Promise<void> {
+  async releaseLeased(
+    scope: string,
+    key: string,
+    leaseVersion: bigint,
+  ): Promise<void> {
     await this._database.db
       .delete(idempotencyKeys)
       .where(
@@ -208,6 +230,7 @@ export class IdempotencyService {
           eq(idempotencyKeys.scope, scope),
           eq(idempotencyKeys.key, key),
           eq(idempotencyKeys.status, 'IN_PROGRESS'),
+          eq(idempotencyKeys.leaseVersion, leaseVersion),
         ),
       );
   }

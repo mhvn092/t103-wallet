@@ -184,4 +184,58 @@ describe('Daily PSP Settlement Reconciliation (Integration)', () => {
 
     await assertGlobalFinancialInvariants(database.pool);
   });
+
+  it('handles negative CSV deposit rows without 500 and consumes matched local deposits once on duplicate CSV refs (F-09, F-13)', async () => {
+    const userId = `rec_dup_${faker.string.alphanumeric(6)}`;
+    const singleDepId = await seedSucceededDeposit({
+      userId,
+      amountIrt: 50_000n,
+      refId: '999888777',
+      token: `tok_coll_${faker.string.alphanumeric(6)}`,
+    });
+
+    const targetDate = '2026-11-25';
+    await database.pool.query(
+      `UPDATE deposits SET verified_at = '2026-11-25T10:00:00Z' WHERE id = $1`,
+      [singleDepId],
+    );
+
+    mockPspClient.fetchSettlementCsv.mockResolvedValueOnce(
+      [
+        'ردیف,تاریخ,شماره پیگیری,نوع تراکنش,مبلغ (ریال),شرح',
+        '1,۱۴۰۵/۰۹/۰۴,000999888777,واریز درگاه,"500,000",اولین رکورد',
+        '2,۱۴۰۵/۰۹/۰۴,999888777,واریز درگاه,"600,000",رکورد تکراری با مبلغ متفاوت',
+        '3,۱۴۰۵/۰۹/۰۴,555444333,واریز درگاه,"-250,000",مبلغ منفی خراب',
+      ].join('\r\n'),
+    );
+
+    const res = await request(app.getHttpServer())
+      .post('/reconciliation/run')
+      .send({ date: targetDate })
+      .expect(200);
+
+    expect(res.body.summary).toEqual({
+      csvDepositCount: 3,
+      localDepositCount: 1,
+      matchedCount: 1,
+      mismatchCount: 2,
+      duplicateCsvRowsIgnored: 0,
+    });
+    expect(res.body.mismatches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'MISSING_IN_LOCAL',
+          reference: '999888777',
+          csvAmount: '60000',
+        }),
+        expect.objectContaining({
+          type: 'AMOUNT_MISMATCH',
+          reference: '555444333',
+          csvAmount: '-25000',
+        }),
+      ]),
+    );
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
 });

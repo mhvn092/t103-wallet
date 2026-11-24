@@ -136,14 +136,52 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
       .expect(403);
     expect(frozenRes.body.code).toBe('OUTBOUND_FROZEN');
 
+    // F-06: Different sender (bob) can reuse identical Idempotency-Key, while alice reusing key with invalid self-transfer returns 422
+    const bobTransferRes = await request(app.getHttpServer())
+      .post('/transfers')
+      .set('Idempotency-Key', idemKey)
+      .send({
+        fromUserId: bob,
+        toUserId: alice,
+        currency: 'USDT',
+        amount: '1',
+      })
+      .expect(201);
+    expect(bobTransferRes.body.transferId).not.toBe(xfer1.body.transferId);
+
+    const aliceInvalidReuse = await request(app.getHttpServer())
+      .post('/transfers')
+      .set('Idempotency-Key', idemKey)
+      .send({
+        fromUserId: alice,
+        toUserId: alice,
+        currency: 'USDT',
+        amount: '5.125',
+      })
+      .expect(422);
+    expect(aliceInvalidReuse.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    // F-09: Overflow transfer amount returns 400 INVALID_REQUEST
+    const ovfTransfer = await request(app.getHttpServer())
+      .post('/transfers')
+      .set('Idempotency-Key', `xfer-ovf-${faker.string.uuid()}`)
+      .send({
+        fromUserId: bob,
+        toUserId: alice,
+        currency: 'IRT',
+        amount: '1'.padEnd(41, '0'),
+      })
+      .expect(400);
+    expect(ovfTransfer.body.code).toBe('INVALID_REQUEST');
+
     const aliceWallet = await request(app.getHttpServer())
       .get(`/wallets/${alice}`)
       .expect(200);
     const bobWallet = await request(app.getHttpServer())
       .get(`/wallets/${bob}`)
       .expect(200);
-    expect(aliceWallet.body.balances[1].available).toBe('10.125');
-    expect(bobWallet.body.balances[1].available).toBe('5.125');
+    expect(aliceWallet.body.balances[1].available).toBe('11.125');
+    expect(bobWallet.body.balances[1].available).toBe('4.125');
 
     await assertGlobalFinancialInvariants(database.pool);
   });

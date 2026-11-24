@@ -30,11 +30,11 @@ export class InternalOpsGuard implements CanActivate {
     const expectedKey = this._config.get('INTERNAL_API_KEY', { infer: true });
     const appEnv = this._config.get('APP_ENV', { infer: true });
 
-    if (appEnv === 'production' && !allowedIpsRaw && !expectedKey) {
+    if (appEnv === 'production' && !expectedKey) {
       throw new DomainException(
         HttpStatus.FORBIDDEN,
         ErrorCode.FORBIDDEN,
-        'Internal operations require API key or IP allowlist in production',
+        'Internal operations require INTERNAL_API_KEY in production',
       );
     }
 

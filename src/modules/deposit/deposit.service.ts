@@ -56,9 +56,7 @@ export class DepositService {
     statusCode: number;
     body: DepositCreateResponseDto;
   }> {
-    const scope = 'POST:/deposits';
-    const amountMinor = parseAmountToMinor(params.dto.amount, 'IRT');
-
+    const scope = `POST:/deposits:${params.dto.userId}`;
     const claim = await this._idempotency.claimLeased<DepositCreateResponseDto>(
       {
         scope,
@@ -77,6 +75,7 @@ export class DepositService {
 
     let settledIdempotency = false;
     try {
+      const amountMinor = parseAmountToMinor(params.dto.amount, 'IRT');
       await this._walletService.ensureUserScaffold({
         accountSpecs: [
           {
@@ -96,13 +95,14 @@ export class DepositService {
         orderId,
       );
 
-      const pspPayment = await this._createPspPaymentOrRelease(
-        created,
+      const pspPayment = await this._createPspPaymentOrRelease({
+        deposit: created,
         amountMinor,
         orderId,
         scope,
-        params.idempotencyKey,
-      );
+        idempotencyKey: params.idempotencyKey,
+        leaseVersion: claim.leaseVersion,
+      });
       if (!pspPayment.ok) {
         settledIdempotency = true;
         throw pspPayment.error;
@@ -114,6 +114,7 @@ export class DepositService {
         pspPayment: pspPayment.value,
         scope,
         idempotencyKey: params.idempotencyKey,
+        leaseVersion: claim.leaseVersion,
       });
       settledIdempotency = true;
 
@@ -125,7 +126,7 @@ export class DepositService {
     } finally {
       if (!settledIdempotency) {
         await this._idempotency
-          .releaseLeased(scope, params.idempotencyKey)
+          .releaseLeased(scope, params.idempotencyKey, claim.leaseVersion)
           .catch(() => undefined);
       }
     }
@@ -301,13 +302,14 @@ export class DepositService {
     return created;
   }
 
-  private async _createPspPaymentOrRelease(
-    deposit: DepositRow,
-    amountMinor: bigint,
-    orderId: string,
-    scope: string,
-    idempotencyKey: string,
-  ): Promise<
+  private async _createPspPaymentOrRelease(params: {
+    deposit: DepositRow;
+    amountMinor: bigint;
+    orderId: string;
+    scope: string;
+    idempotencyKey: string;
+    leaseVersion: bigint;
+  }): Promise<
     | {
         ok: true;
         value: { token: string; paymentUrl: string; expiresAt: Date };
@@ -319,17 +321,17 @@ export class DepositService {
 
     try {
       const value = await this._pspClient.createPayment({
-        amountIrt: amountMinor,
-        orderId,
+        amountIrt: params.amountMinor,
+        orderId: params.orderId,
         callbackUrl,
       });
       return { ok: true, value };
     } catch (error) {
-      await this._markDepositFailedIfUnsettled(deposit, null).catch(
+      await this._markDepositFailedIfUnsettled(params.deposit, null).catch(
         () => undefined,
       );
       await this._idempotency
-        .releaseLeased(scope, idempotencyKey)
+        .releaseLeased(params.scope, params.idempotencyKey, params.leaseVersion)
         .catch(() => undefined);
       return { ok: false, error };
     }
@@ -341,6 +343,7 @@ export class DepositService {
     pspPayment: { token: string; paymentUrl: string; expiresAt: Date };
     scope: string;
     idempotencyKey: string;
+    leaseVersion: bigint;
   }): Promise<DepositCreateResponseDto> {
     const now = new Date();
     const body: DepositCreateResponseDto = {
@@ -373,6 +376,7 @@ export class DepositService {
       await this._idempotency.completeLeased({
         scope: params.scope,
         key: params.idempotencyKey,
+        leaseVersion: params.leaseVersion,
         statusCode: HttpStatus.CREATED,
         body,
         executor: tx,

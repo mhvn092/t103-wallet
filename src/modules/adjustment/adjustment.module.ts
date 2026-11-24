@@ -1,14 +1,18 @@
 import { Module } from '@nestjs/common';
+import { DatabaseModule } from '../../database/database.module.js';
 import { IdempotencyModule } from '../idempotency/idempotency.module.js';
 import { LedgerModule } from '../ledger/ledger.module.js';
 import { WalletModule } from '../wallet/wallet.module.js';
 import { AdjustmentController } from './adjustment.controller.js';
 import { AdjustmentService } from './adjustment.service.js';
+import { InternalOpsController } from './internal-ops.controller.js';
 import { InternalOpsGuard } from './internal-ops.guard.js';
+import { InternalOpsService } from './internal-ops.service.js';
 
 @Module({
-  imports: [IdempotencyModule, WalletModule, LedgerModule],
-  controllers: [AdjustmentController],
-  providers: [AdjustmentService, InternalOpsGuard],
+  imports: [DatabaseModule, IdempotencyModule, WalletModule, LedgerModule],
+  controllers: [AdjustmentController, InternalOpsController],
+  providers: [AdjustmentService, InternalOpsService, InternalOpsGuard],
+  exports: [InternalOpsGuard],
 })
 export class AdjustmentModule {}

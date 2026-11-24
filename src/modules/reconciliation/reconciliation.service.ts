@@ -1,8 +1,10 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { sql } from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import { formatMinorToApi } from '../../common/utils/money.js';
+import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import { deposits } from '../../database/schema/index.js';
 import { PspClient } from '../providers/psp.client.js';
@@ -17,6 +19,12 @@ import {
 } from './settlement-csv.parser.js';
 
 type DepositRow = typeof deposits.$inferSelect;
+
+function formatSignedIrtMinor(minor: bigint): string {
+  return minor < 0n
+    ? `-${formatMinorToApi(-minor, 'IRT')}`
+    : formatMinorToApi(minor, 'IRT');
+}
 
 function assertValidCalendarDate(dateStr: string): string {
   const [yStr, mStr, dStr] = dateStr.split('-');
@@ -42,6 +50,7 @@ function assertValidCalendarDate(dateStr: string): string {
 @Injectable()
 export class ReconciliationService {
   constructor(
+    private readonly _config: ConfigService<EnvConfig, true>,
     private readonly _database: DatabaseService,
     private readonly _pspClient: PspClient,
   ) {}
@@ -51,23 +60,28 @@ export class ReconciliationService {
     const csvText = await this._pspClient.fetchSettlementCsv(validDate);
     const parsedCsv = parseSettlementCsv(csvText);
 
-    const localForDate =
-      await this._findLocalSucceededDepositsForDate(validDate);
-    const candidatePool = await this._findLocalSucceededAroundDate(validDate);
-
-    const csvByRef = new Map<string, CsvDepositRecord[]>();
-    for (const row of parsedCsv.deposits) {
-      const list = csvByRef.get(row.normalizedReference) ?? [];
-      list.push(row);
-      csvByRef.set(row.normalizedReference, list);
-    }
+    const localForDate = await this._findSucceededInDateOffsetRange(
+      validDate,
+      0,
+      1,
+    );
+    const candidatePool = await this._findSucceededInDateOffsetRange(
+      validDate,
+      -1,
+      2,
+    );
 
     const localByRef = this._groupDepositsByNormalizedRef(candidatePool);
+    const consumedLocalIds = new Set<string>();
     const mismatches: ReconciliationMismatchDto[] = [];
     let matchedCount = 0;
 
     for (const csvRow of parsedCsv.deposits) {
-      const result = this._reconcileCsvRow(csvRow, localByRef);
+      const result = this._reconcileCsvRow(
+        csvRow,
+        localByRef,
+        consumedLocalIds,
+      );
       if (result.matched) {
         matchedCount += 1;
       }
@@ -77,7 +91,7 @@ export class ReconciliationService {
     }
 
     for (const local of localForDate) {
-      const mismatch = this._checkMissingInCsv(local, csvByRef);
+      const mismatch = this._checkMissingInCsv(local, consumedLocalIds);
       if (mismatch) {
         mismatches.push(mismatch);
       }
@@ -96,25 +110,19 @@ export class ReconciliationService {
     };
   }
 
-  private async _findLocalSucceededDepositsForDate(
+  private async _findSucceededInDateOffsetRange(
     dateStr: string,
+    startOffsetDays: number,
+    endOffsetDaysExclusive: number,
   ): Promise<DepositRow[]> {
+    const tz = this._config.get('RECONCILIATION_TZ', { infer: true });
     return this._database.db
       .select()
       .from(deposits)
       .where(
-        sql`${deposits.status} = 'SUCCEEDED' AND (${deposits.verifiedAt} AT TIME ZONE 'UTC')::date = ${dateStr}::date`,
-      );
-  }
-
-  private async _findLocalSucceededAroundDate(
-    dateStr: string,
-  ): Promise<DepositRow[]> {
-    return this._database.db
-      .select()
-      .from(deposits)
-      .where(
-        sql`${deposits.status} = 'SUCCEEDED' AND (${deposits.verifiedAt} AT TIME ZONE 'UTC')::date BETWEEN (${dateStr}::date - INTERVAL '1 day') AND (${dateStr}::date + INTERVAL '1 day')`,
+        sql`${deposits.status} = 'SUCCEEDED'
+          AND ${deposits.verifiedAt} >= ((${dateStr}::date + (${startOffsetDays} * INTERVAL '1 day'))::timestamp AT TIME ZONE ${tz})
+          AND ${deposits.verifiedAt} < ((${dateStr}::date + (${endOffsetDaysExclusive} * INTERVAL '1 day'))::timestamp AT TIME ZONE ${tz})`,
       );
   }
 
@@ -137,19 +145,56 @@ export class ReconciliationService {
     return map;
   }
 
+  private _consumeMatchingCandidate(
+    candidates: DepositRow[] | undefined,
+    expectedAmountIrt: bigint,
+  ): DepositRow | undefined {
+    if (!candidates || candidates.length === 0) {
+      return undefined;
+    }
+    const exactIndex = candidates.findIndex(
+      (c) => BigInt(c.verifiedAmount ?? '0') === expectedAmountIrt,
+    );
+    if (exactIndex >= 0) {
+      return candidates.splice(exactIndex, 1)[0];
+    }
+    return candidates.shift();
+  }
+
   private _reconcileCsvRow(
     csvRow: CsvDepositRecord,
     localByRef: Map<string, DepositRow[]>,
+    consumedLocalIds: Set<string>,
   ): { matched: boolean; mismatch?: ReconciliationMismatchDto } {
     const candidates = localByRef.get(csvRow.normalizedReference);
-    const match = candidates?.[0];
+    const match = this._consumeMatchingCandidate(candidates, csvRow.amountIrt);
+
+    if (csvRow.amountIrr <= 0n) {
+      if (match) {
+        consumedLocalIds.add(match.id);
+      }
+      const localIrt = match ? BigInt(match.verifiedAmount ?? '0') : null;
+      return {
+        matched: false,
+        mismatch: {
+          type: 'AMOUNT_MISMATCH',
+          reference: csvRow.normalizedReference,
+          csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
+          localAmount:
+            localIrt !== null ? formatMinorToApi(localIrt, 'IRT') : null,
+          depositId: match?.id ?? null,
+          details: 'PSP settlement CSV deposit row has non-positive IRR amount',
+        },
+      };
+    }
+
     if (!match) {
       return {
         matched: false,
         mismatch: {
           type: 'MISSING_IN_LOCAL',
           reference: csvRow.normalizedReference,
-          csvAmount: formatMinorToApi(csvRow.amountIrt, 'IRT'),
+          csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount: null,
           depositId: null,
           details: `PSP settlement row present in CSV (${csvRow.description}) but missing in local SUCCEEDED deposits`,
@@ -157,6 +202,7 @@ export class ReconciliationService {
       };
     }
 
+    consumedLocalIds.add(match.id);
     const localIrt =
       match.verifiedAmount !== null ? BigInt(match.verifiedAmount) : 0n;
 
@@ -166,7 +212,7 @@ export class ReconciliationService {
         mismatch: {
           type: 'AMOUNT_MISMATCH',
           reference: csvRow.normalizedReference,
-          csvAmount: formatMinorToApi(csvRow.amountIrt, 'IRT'),
+          csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount: formatMinorToApi(localIrt, 'IRT'),
           depositId: match.id,
           details: csvRow.hasIrrRemainder
@@ -181,15 +227,15 @@ export class ReconciliationService {
 
   private _checkMissingInCsv(
     local: DepositRow,
-    csvByRef: Map<string, CsvDepositRecord[]>,
+    consumedLocalIds: Set<string>,
   ): ReconciliationMismatchDto | undefined {
-    const normRef = local.pspRefId
-      ? normalizeSettlementReference(local.pspRefId)
-      : '';
-    if (normRef && csvByRef.has(normRef)) {
+    if (consumedLocalIds.has(local.id)) {
       return undefined;
     }
 
+    const normRef = local.pspRefId
+      ? normalizeSettlementReference(local.pspRefId)
+      : '';
     const localIrt =
       local.verifiedAmount !== null ? BigInt(local.verifiedAmount) : 0n;
     return {

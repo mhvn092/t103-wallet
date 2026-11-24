@@ -13,6 +13,7 @@ export class AdjustmentCreateDto extends UserScopedDto {
   @TrimString()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(30)
   amount!: string;
 
   @ApiProperty({ example: 'deposit delay compensation' })

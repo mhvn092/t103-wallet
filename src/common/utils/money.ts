@@ -7,8 +7,20 @@ export type Currency = (typeof CURRENCIES)[number];
 
 const USDT_SCALE = 6;
 export const USDT_MINOR_PER_UNIT = 1_000_000n;
+export const MAX_AMOUNT_MINOR = 10n ** 15n;
 const IRT_REGEX = /^[1-9]\d*$/;
 const USDT_REGEX = /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/;
+
+function assertWithinMaxAmount(minor: bigint): bigint {
+  if (minor > MAX_AMOUNT_MINOR) {
+    throw new DomainException(
+      HttpStatus.BAD_REQUEST,
+      ErrorCode.INVALID_REQUEST,
+      'Amount exceeds maximum allowed magnitude',
+    );
+  }
+  return minor;
+}
 
 export function parseAmountToMinor(
   raw: string,
@@ -27,7 +39,7 @@ export function parseAmountToMinor(
         'IRT amount must be a positive integer string',
       );
     }
-    return BigInt(trimmed);
+    return assertWithinMaxAmount(BigInt(trimmed));
   }
 
   if (!USDT_REGEX.test(trimmed)) {
@@ -49,7 +61,7 @@ export function parseAmountToMinor(
       'USDT amount must be greater than zero',
     );
   }
-  return minor;
+  return assertWithinMaxAmount(minor);
 }
 
 export function formatMinorToApi(minor: bigint, currency: Currency): string {

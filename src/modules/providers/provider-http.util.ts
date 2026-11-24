@@ -1,4 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
+import { getCorrelationId } from '../../common/context/request-context.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 
 type HttpJsonOutcome =
@@ -15,12 +16,18 @@ async function fetchJsonWithTimeout(params: {
   timeoutMs: number;
 }): Promise<HttpJsonOutcome> {
   try {
+    const headers: Record<string, string> = {};
+    if (params.body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
+    const correlationId = getCorrelationId();
+    if (correlationId) {
+      headers['x-request-id'] = correlationId;
+    }
+
     const res = await fetch(params.url, {
       method: params.method,
-      headers:
-        params.body !== undefined
-          ? { 'Content-Type': 'application/json' }
-          : undefined,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: params.body !== undefined ? JSON.stringify(params.body) : undefined,
       signal: AbortSignal.timeout(params.timeoutMs),
     });

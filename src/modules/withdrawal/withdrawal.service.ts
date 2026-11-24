@@ -94,14 +94,6 @@ export class WithdrawalService {
     dto: WithdrawalCreateDto;
   }): Promise<IdempotentExecutionResult<WithdrawalResponseDto>> {
     const { dto } = params;
-    const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
-    const normalizedDest = assertValidDestination(
-      dto.destination,
-      dto.currency,
-    );
-    this._assertAboveMinimum(amountMinor, dto.currency);
-
-    const policy = this._computePolicyAmounts(amountMinor, dto.currency);
     const limitDate = getTehranDateString();
     const availableSpec = {
       userId: dto.userId,
@@ -126,10 +118,18 @@ export class WithdrawalService {
     });
 
     return this._idempotency.executeInTransaction<WithdrawalResponseDto>({
-      scope: 'POST:/withdrawals',
+      scope: `POST:/withdrawals:${dto.userId}`,
       key: params.idempotencyKey,
       requestBody: dto,
       handler: async (tx) => {
+        const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
+        const normalizedDest = assertValidDestination(
+          dto.destination,
+          dto.currency,
+        );
+        this._assertAboveMinimum(amountMinor, dto.currency);
+        const policy = this._computePolicyAmounts(amountMinor, dto.currency);
+
         await this._assertCurrencyNotPaused(tx, dto.currency);
         const usedIrt = await this._walletService.lockDailyLimit(
           tx,

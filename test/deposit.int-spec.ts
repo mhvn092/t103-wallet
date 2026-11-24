@@ -571,4 +571,107 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
 
     await assertGlobalFinancialInvariants(database.pool);
   });
+
+  it('fences expired leased idempotency slots against stale overwrite, isolates keys per user, and rejects overflow amounts (F-05, F-06, F-09)', async () => {
+    const userA = `ua_${faker.string.alphanumeric(6)}`;
+    const userB = `ub_${faker.string.alphanumeric(6)}`;
+    const sharedKey = `dep-shared-${faker.string.uuid()}`;
+
+    // F-06: Two distinct users with identical Idempotency-Key both succeed
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token: `tok_ua_${faker.string.alphanumeric(6)}`,
+      paymentUrl: 'http://psp.local/pay/ua',
+      expiresAt: new Date(Date.now() + 300_000),
+    });
+    const depA = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', sharedKey)
+      .send({ userId: userA, amount: '50000' })
+      .expect(201);
+
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token: `tok_ub_${faker.string.alphanumeric(6)}`,
+      paymentUrl: 'http://psp.local/pay/ub',
+      expiresAt: new Date(Date.now() + 300_000),
+    });
+    const depB = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', sharedKey)
+      .send({ userId: userB, amount: '50000' })
+      .expect(201);
+    expect(depB.body.depositId).not.toBe(depA.body.depositId);
+
+    // Reusing committed key with invalid amount still returns 422 IDEMPOTENCY_KEY_REUSED (not 400)
+    const reuseInvalid = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', sharedKey)
+      .send({ userId: userA, amount: 'not-a-number' })
+      .expect(422);
+    expect(reuseInvalid.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    // F-09: Overflow magnitude rejected with 400 INVALID_REQUEST
+    const overflow = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', `dep-ovf-${faker.string.uuid()}`)
+      .send({ userId: userA, amount: '1'.padEnd(41, '0') })
+      .expect(400);
+    expect(overflow.body.code).toBe('INVALID_REQUEST');
+
+    // F-05: Stale request 1 finishes after lease reclaim by request 2 -> fenced with 409; replay preserves D2
+    const leaseKey = `dep-fence-${faker.string.uuid()}`;
+    let markReq1InPsp!: () => void;
+    const req1InPsp = new Promise<void>((resolve) => {
+      markReq1InPsp = resolve;
+    });
+    let releaseReq1!: () => void;
+    const req1Barrier = new Promise<void>((resolve) => {
+      releaseReq1 = resolve;
+    });
+
+    mockPspClient.createPayment.mockImplementationOnce(async () => {
+      markReq1InPsp();
+      await req1Barrier;
+      return {
+        token: `tok_stale_${faker.string.alphanumeric(6)}`,
+        paymentUrl: 'http://psp.local/pay/stale',
+        expiresAt: new Date(Date.now() + 300_000),
+      };
+    });
+    const req1Promise = request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', leaseKey)
+      .send({ userId: userA, amount: '70000' })
+      .then((r) => r);
+
+    await req1InPsp;
+    await database.pool.query(
+      `UPDATE idempotency_keys SET locked_until = NOW() - INTERVAL '1 second' WHERE key = $1`,
+      [leaseKey],
+    );
+
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token: `tok_win_${faker.string.alphanumeric(6)}`,
+      paymentUrl: 'http://psp.local/pay/win',
+      expiresAt: new Date(Date.now() + 300_000),
+    });
+    const req2Res = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', leaseKey)
+      .send({ userId: userA, amount: '70000' })
+      .expect(201);
+
+    releaseReq1();
+    const req1Res = await req1Promise;
+    expect(req1Res.status).toBe(409);
+    expect(req1Res.body.code).toBe('IDEMPOTENCY_IN_PROGRESS');
+
+    const replayWin = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', leaseKey)
+      .send({ userId: userA, amount: '70000' })
+      .expect(201);
+    expect(replayWin.body.depositId).toBe(req2Res.body.depositId);
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
 });

@@ -16,6 +16,7 @@ export class WithdrawalCreateDto extends UserScopedDto {
   @TrimString()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(30)
   amount!: string;
 
   @ApiProperty({

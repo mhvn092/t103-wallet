@@ -1,6 +1,7 @@
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_AMOUNT_MINOR,
   USDT_MINOR_PER_UNIT,
   convertUsdtToIrtCeiling,
   formatMinorToApi,
@@ -8,13 +9,22 @@ import {
 } from './money.js';
 
 describe('money utilities', () => {
-  it('parses IRT positive integer strings and rejects floats/zero/negatives', () => {
+  it('parses IRT positive integer strings and rejects floats/zero/negatives/overflow', () => {
     expect(parseAmountToMinor('100000', 'IRT')).toBe(100_000n);
+    expect(parseAmountToMinor(MAX_AMOUNT_MINOR.toString(), 'IRT')).toBe(
+      MAX_AMOUNT_MINOR,
+    );
     expect(parseAmountToMinor('0', 'IRT', { allowZero: true })).toBe(0n);
     expect(() => parseAmountToMinor('0', 'IRT')).toThrow();
     expect(() => parseAmountToMinor('100.5', 'IRT')).toThrow();
     expect(() => parseAmountToMinor('-500', 'IRT')).toThrow();
     expect(() => parseAmountToMinor('1e5', 'IRT')).toThrow();
+    expect(() =>
+      parseAmountToMinor((MAX_AMOUNT_MINOR + 1n).toString(), 'IRT'),
+    ).toThrow(/maximum allowed magnitude/);
+    expect(() => parseAmountToMinor('1000000000.000001', 'USDT')).toThrow(
+      /maximum allowed magnitude/,
+    );
   });
 
   it('parses USDT up to 6 decimals into micro-USDT bigint without float precision loss', () => {

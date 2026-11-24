@@ -9,6 +9,7 @@ import { configureApp } from '../src/app.setup.js';
 import { generateUuidV7 } from '../src/common/utils/uuidv7.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
+import { RetentionWorker } from '../src/modules/idempotency/retention.worker.js';
 import {
   getRequiredTestDatabaseUri,
   prepareTestEnv,
@@ -292,5 +293,39 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
       event_type: 'BALANCE_CHANGED',
       status: 'PENDING',
     });
+  });
+
+  it('propagates X-Request-Id correlation headers, exposes /internal/metrics with 0 drift, and purges expired retention rows (F-14, F-15)', async () => {
+    const customId = `corr-${faker.string.alphanumeric(10)}`;
+    const walletWithId = await request(app.getHttpServer())
+      .get('/wallets/corr_probe')
+      .set('X-Request-Id', customId)
+      .expect(200);
+    expect(walletWithId.headers['x-request-id']).toBe(customId);
+
+    const walletGenerated = await request(app.getHttpServer())
+      .get('/wallets/corr_probe')
+      .expect(200);
+    expect(walletGenerated.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+
+    const metricsRes = await request(app.getHttpServer())
+      .get('/internal/metrics')
+      .expect(200);
+    expect(metricsRes.body).toEqual({
+      openDiscrepancies: expect.any(Number),
+      manualReviewWithdrawals: expect.any(Number),
+      pendingOutboxEvents: expect.any(Number),
+      balanceDriftAccounts: 0,
+      pausedWithdrawalCurrencies: [],
+    });
+
+    await database.pool.query(
+      `INSERT INTO idempotency_keys (scope, key, request_hash, status, expires_at)
+       VALUES ('POST:/test', $1, 'hash_expired', 'COMPLETED', NOW() - INTERVAL '2 hours')`,
+      [`expired-${faker.string.uuid()}`],
+    );
+    const retentionWorker = app.get(RetentionWorker);
+    const purged = await retentionWorker.purgeExpiredOperationalRecords(100);
+    expect(purged.idempotencyDeleted).toBeGreaterThanOrEqual(1);
   });
 });

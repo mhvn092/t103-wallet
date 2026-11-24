@@ -30,7 +30,6 @@ export class AdjustmentService {
     operatorId: string;
   }): Promise<IdempotentExecutionResult<AdjustmentResponseDto>> {
     const { dto } = params;
-    const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
     const availableSpec = {
       userId: dto.userId,
       currency: dto.currency,
@@ -43,10 +42,11 @@ export class AdjustmentService {
     });
 
     return this._idempotency.executeInTransaction<AdjustmentResponseDto>({
-      scope: 'POST:/internal/adjustments',
+      scope: `POST:/internal/adjustments:${dto.userId}`,
       key: params.idempotencyKey,
       requestBody: dto,
       handler: async (tx) => {
+        const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
         const lockedAccounts =
           await this._walletService.lockUserAccountsCanonical(tx, [
             availableSpec,

@@ -29,15 +29,6 @@ export class TransferService {
     dto: TransferCreateDto;
   }): Promise<IdempotentExecutionResult<TransferResponseDto>> {
     const { dto } = params;
-    if (dto.fromUserId === dto.toUserId) {
-      throw new DomainException(
-        HttpStatus.BAD_REQUEST,
-        ErrorCode.INVALID_REQUEST,
-        'Sender and recipient must be different users',
-      );
-    }
-
-    const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
     const fromSpec = {
       userId: dto.fromUserId,
       currency: dto.currency,
@@ -55,10 +46,18 @@ export class TransferService {
     });
 
     return this._idempotency.executeInTransaction<TransferResponseDto>({
-      scope: 'POST:/transfers',
+      scope: `POST:/transfers:${dto.fromUserId}`,
       key: params.idempotencyKey,
       requestBody: dto,
       handler: async (tx) => {
+        if (dto.fromUserId === dto.toUserId) {
+          throw new DomainException(
+            HttpStatus.BAD_REQUEST,
+            ErrorCode.INVALID_REQUEST,
+            'Sender and recipient must be different users',
+          );
+        }
+        const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
         const frozen = await this._walletService.lockUserRestriction(
           tx,
           dto.fromUserId,
