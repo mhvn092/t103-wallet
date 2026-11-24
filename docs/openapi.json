@@ -1,0 +1,1750 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "HealthController_checkLiveness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Service process and event loop are live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthLivenessResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Service liveness check",
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/health/liveness": {
+      "get": {
+        "operationId": "HealthController_checkKubernetesLiveness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Service process and event loop are live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthLivenessResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Kubernetes liveness probe",
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "HealthController_checkReadiness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Service and PostgreSQL are ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthReadinessResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or External Provider Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Service readiness check (verifies PostgreSQL)",
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/health/readiness": {
+      "get": {
+        "operationId": "HealthController_checkKubernetesReadiness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Service and PostgreSQL are ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthReadinessResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or External Provider Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Kubernetes readiness probe (verifies PostgreSQL)",
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/wallets/{userId}": {
+      "get": {
+        "operationId": "WalletController_getWallet",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "user_1",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User wallet balances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBalancesResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get user IRT & USDT balances (returns 0 balances if unseen)",
+        "tags": [
+          "Wallets"
+        ]
+      }
+    },
+    "/wallets/{userId}/ledger": {
+      "get": {
+        "operationId": "WalletController_getLedger",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "user_1",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Keyset pagination cursor (last seen ledger item ID)",
+            "schema": {
+              "example": "42",
+              "type": "string"
+            }
+          },
+          {
+            "name": "accountType",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "AVAILABLE",
+              "type": "string",
+              "enum": [
+                "AVAILABLE",
+                "LOCKED",
+                "RECEIVABLE",
+                "ALL"
+              ]
+            }
+          },
+          {
+            "name": "currency",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "IRT",
+                "USDT"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated ledger items for the requested user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletLedgerResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Keyset-paginated immutable ledger entries",
+        "tags": [
+          "Wallets"
+        ]
+      }
+    },
+    "/internal/adjustments": {
+      "post": {
+        "operationId": "AdjustmentController_create",
+        "parameters": [
+          {
+            "name": "X-Internal-Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Operator-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdjustmentCreateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Adjustment posted to ledger",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdjustmentResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business Rule Violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Manually credit a user wallet with double-entry audit trail",
+        "tags": [
+          "Internal Operations"
+        ]
+      }
+    },
+    "/deposits": {
+      "post": {
+        "operationId": "DepositController_initiate",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositCreateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Deposit initiated and PSP payment link created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositCreateResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business Rule Violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or External Provider Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Initiate an IRT PSP deposit",
+        "tags": [
+          "Deposits & PSP Webhooks"
+        ]
+      }
+    },
+    "/deposits/{id}": {
+      "get": {
+        "operationId": "DepositController_getDeposit",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deposit record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositDetailResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get deposit details and settlement status",
+        "tags": [
+          "Deposits & PSP Webhooks"
+        ]
+      }
+    },
+    "/webhooks/psp/callback": {
+      "post": {
+        "operationId": "DepositController_handleCallback",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositPspCallbackDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Callback acknowledged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositCallbackAckDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Unsigned PSP wake-up callback (verifies via PSP API)",
+        "tags": [
+          "Deposits & PSP Webhooks"
+        ]
+      }
+    },
+    "/withdrawals": {
+      "post": {
+        "operationId": "WithdrawalController_create",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawalCreateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Withdrawal created and funds locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business Rule Violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create an IRT or USDT withdrawal with atomic hold and limit check",
+        "tags": [
+          "Withdrawals"
+        ]
+      }
+    },
+    "/withdrawals/{id}": {
+      "get": {
+        "operationId": "WithdrawalController_getWithdrawal",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Withdrawal details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get withdrawal status and metadata",
+        "tags": [
+          "Withdrawals"
+        ]
+      }
+    },
+    "/withdrawals/{id}/cancel": {
+      "post": {
+        "operationId": "WithdrawalController_cancelWithdrawal",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Withdrawal cancelled and locked funds released",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancel a withdrawal strictly while in PENDING_DISPATCH",
+        "tags": [
+          "Withdrawals"
+        ]
+      }
+    },
+    "/webhooks/payout": {
+      "post": {
+        "operationId": "PayoutWebhookController_handleWebhook",
+        "parameters": [
+          {
+            "name": "x-signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawalPayoutWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook verified and processed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalWebhookAckDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "HMAC-SHA256 signed payout provider webhook callback",
+        "tags": [
+          "Payout Webhooks"
+        ]
+      }
+    },
+    "/transfers": {
+      "post": {
+        "operationId": "TransferController_create",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferCreateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Transfer settled atomically in double-entry ledger",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business Rule Violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Atomic P2P internal transfer between two users (IRT or USDT)",
+        "tags": [
+          "Transfers"
+        ]
+      }
+    },
+    "/reconciliation/run": {
+      "post": {
+        "operationId": "ReconciliationController_run",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconciliationRunDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reconciliation report with matched counts and mismatches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or External Provider Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Run read-only daily settlement reconciliation against PSP CSV report",
+        "tags": [
+          "Reconciliation"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "Hamta Pay T-103 Wallet & Ledger API",
+    "description": "Crypto Exchange Wallet, Double-Entry Ledger, Deposits, Withdrawals, Transfers, and Reconciliation API",
+    "version": "1.0.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "HealthLivenessResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "timestamp": {
+            "type": "string",
+            "example": "2026-11-24T09:45:00.000Z"
+          }
+        },
+        "required": [
+          "status",
+          "timestamp"
+        ]
+      },
+      "HealthReadinessResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ready"
+          },
+          "database": {
+            "type": "string",
+            "example": "ok"
+          },
+          "timestamp": {
+            "type": "string",
+            "example": "2026-11-24T09:45:00.000Z"
+          }
+        },
+        "required": [
+          "status",
+          "database",
+          "timestamp"
+        ]
+      },
+      "ErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "INVALID_REQUEST",
+              "INVALID_DESTINATION",
+              "INSUFFICIENT_FUNDS",
+              "DAILY_LIMIT_EXCEEDED",
+              "BELOW_MINIMUM",
+              "IDEMPOTENCY_KEY_REUSED",
+              "IDEMPOTENCY_IN_PROGRESS",
+              "MISSING_IDEMPOTENCY_KEY",
+              "OUTBOUND_FROZEN",
+              "INVALID_SIGNATURE",
+              "UNAUTHORIZED",
+              "FORBIDDEN",
+              "NOT_FOUND",
+              "INVALID_STATE_TRANSITION",
+              "PROVIDER_UNAVAILABLE",
+              "INTERNAL_ERROR"
+            ],
+            "example": "INVALID_REQUEST"
+          },
+          "message": {
+            "type": "string",
+            "example": "Validation failed"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "WalletBalanceItemDto": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "available": {
+            "type": "string",
+            "example": "1500000"
+          },
+          "locked": {
+            "type": "string",
+            "example": "200000"
+          },
+          "receivable": {
+            "type": "string",
+            "example": "0"
+          }
+        },
+        "required": [
+          "currency",
+          "available",
+          "locked",
+          "receivable"
+        ]
+      },
+      "WalletBalancesResponseDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          },
+          "balances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WalletBalanceItemDto"
+            }
+          }
+        },
+        "required": [
+          "userId",
+          "balances"
+        ]
+      },
+      "WalletLedgerItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "101"
+          },
+          "transactionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string",
+            "example": "DEPOSIT"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "accountType": {
+            "type": "string",
+            "example": "AVAILABLE"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "DEBIT",
+              "CREDIT"
+            ],
+            "example": "CREDIT"
+          },
+          "amount": {
+            "type": "string",
+            "example": "500000"
+          },
+          "balanceAfter": {
+            "type": "string",
+            "nullable": true,
+            "example": "500000"
+          },
+          "referenceType": {
+            "type": "string",
+            "example": "DEPOSIT"
+          },
+          "referenceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string",
+            "example": "Verified PSP deposit"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "transactionId",
+          "type",
+          "currency",
+          "accountType",
+          "direction",
+          "amount",
+          "balanceAfter",
+          "referenceType",
+          "referenceId",
+          "description",
+          "createdAt"
+        ]
+      },
+      "WalletLedgerResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WalletLedgerItemDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true,
+            "example": "100"
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "AdjustmentCreateDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "amount": {
+            "type": "string",
+            "example": "500000"
+          },
+          "reason": {
+            "type": "string",
+            "example": "deposit delay compensation"
+          }
+        },
+        "required": [
+          "userId",
+          "currency",
+          "amount",
+          "reason"
+        ]
+      },
+      "AdjustmentResponseDto": {
+        "type": "object",
+        "properties": {
+          "adjustmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "amount": {
+            "type": "string",
+            "example": "500000"
+          },
+          "reason": {
+            "type": "string",
+            "example": "deposit delay compensation"
+          },
+          "operatorId": {
+            "type": "string",
+            "example": "ops-ehsan"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "adjustmentId",
+          "userId",
+          "currency",
+          "amount",
+          "reason",
+          "operatorId",
+          "createdAt"
+        ]
+      },
+      "DepositCreateDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Requested deposit amount in IRT (integer string)",
+            "example": "500000"
+          }
+        },
+        "required": [
+          "userId",
+          "amount"
+        ]
+      },
+      "DepositCreateResponseDto": {
+        "type": "object",
+        "properties": {
+          "depositId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "example": "AWAITING_PAYMENT"
+          },
+          "paymentUrl": {
+            "type": "string",
+            "example": "http://localhost:8080/psp/pay/tok_123"
+          },
+          "expiresAt": {
+            "type": "object",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "depositId",
+          "status",
+          "paymentUrl",
+          "expiresAt",
+          "createdAt"
+        ]
+      },
+      "DepositDetailResponseDto": {
+        "type": "object",
+        "properties": {
+          "depositId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          },
+          "requestedAmount": {
+            "type": "string",
+            "example": "500000"
+          },
+          "verifiedAmount": {
+            "type": "string",
+            "nullable": true,
+            "example": "500000"
+          },
+          "amountMismatch": {
+            "type": "boolean",
+            "example": false
+          },
+          "pspToken": {
+            "type": "string",
+            "nullable": true
+          },
+          "pspRefId": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "INITIATED",
+              "AWAITING_PAYMENT",
+              "VERIFYING",
+              "SUCCEEDED",
+              "FAILED"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "verifiedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "depositId",
+          "userId",
+          "requestedAmount",
+          "verifiedAmount",
+          "amountMismatch",
+          "pspToken",
+          "pspRefId",
+          "paymentUrl",
+          "status",
+          "expiresAt",
+          "verifiedAt",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "DepositPspCallbackDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "example": "psp_tok_abc123"
+          },
+          "orderId": {
+            "type": "string",
+            "example": "dep_019abc..."
+          },
+          "status": {
+            "type": "string",
+            "example": "OK"
+          }
+        }
+      },
+      "DepositCallbackAckDto": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean",
+            "example": true
+          },
+          "depositId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "example": "SUCCEEDED"
+          }
+        },
+        "required": [
+          "received"
+        ]
+      },
+      "WithdrawalCreateDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Withdrawal amount (IRT integer or USDT up to 6 decimals)",
+            "example": "250000"
+          },
+          "destination": {
+            "type": "string",
+            "description": "Iranian IBAN for IRT or Base58Check TRC20 address for USDT",
+            "example": "IR062960000000100324200001"
+          }
+        },
+        "required": [
+          "userId",
+          "currency",
+          "amount",
+          "destination"
+        ]
+      },
+      "WithdrawalResponseDto": {
+        "type": "object",
+        "properties": {
+          "withdrawalId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "amount": {
+            "type": "string",
+            "example": "250000"
+          },
+          "fee": {
+            "type": "string",
+            "example": "0"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING_DISPATCH",
+              "DISPATCHING",
+              "PROCESSING",
+              "SUCCEEDED",
+              "FAILED",
+              "MANUAL_REVIEW"
+            ]
+          },
+          "destination": {
+            "type": "string",
+            "example": "IR062960000000100324200001"
+          },
+          "providerRequestId": {
+            "type": "string",
+            "example": "wd_019abc..."
+          },
+          "providerRefId": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "lateSuccessConflict": {
+            "type": "boolean",
+            "example": false
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "withdrawalId",
+          "userId",
+          "currency",
+          "amount",
+          "fee",
+          "status",
+          "destination",
+          "providerRequestId",
+          "providerRefId",
+          "failureReason",
+          "lateSuccessConflict",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "WithdrawalPayoutWebhookDto": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "example": "wd_019abc..."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "PROCESSING",
+              "SUCCEEDED",
+              "FAILED",
+              "RETURNED",
+              "REVERSED"
+            ],
+            "example": "SUCCEEDED"
+          },
+          "trackingId": {
+            "type": "string",
+            "example": "TRK123456"
+          },
+          "refId": {
+            "type": "string",
+            "example": "REF998877"
+          },
+          "reason": {
+            "type": "string",
+            "example": "INVALID_IBAN"
+          },
+          "failureReason": {
+            "type": "string",
+            "example": "INVALID_IBAN"
+          }
+        },
+        "required": [
+          "requestId",
+          "status"
+        ]
+      },
+      "WithdrawalWebhookAckDto": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean",
+            "example": true
+          },
+          "withdrawalId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "example": "SUCCEEDED"
+          }
+        },
+        "required": [
+          "received"
+        ]
+      },
+      "TransferCreateDto": {
+        "type": "object",
+        "properties": {
+          "fromUserId": {
+            "type": "string",
+            "description": "Sender user identifier",
+            "example": "user_alice"
+          },
+          "toUserId": {
+            "type": "string",
+            "description": "Recipient user identifier",
+            "example": "user_bob"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Transfer amount (IRT integer or USDT up to 6 decimals)",
+            "example": "150000"
+          }
+        },
+        "required": [
+          "fromUserId",
+          "toUserId",
+          "currency",
+          "amount"
+        ]
+      },
+      "TransferResponseDto": {
+        "type": "object",
+        "properties": {
+          "transferId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fromUserId": {
+            "type": "string",
+            "example": "user_alice"
+          },
+          "toUserId": {
+            "type": "string",
+            "example": "user_bob"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "amount": {
+            "type": "string",
+            "example": "150000"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "transferId",
+          "fromUserId",
+          "toUserId",
+          "currency",
+          "amount",
+          "createdAt"
+        ]
+      },
+      "ReconciliationRunDto": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "Target settlement calendar date in YYYY-MM-DD",
+            "example": "2026-11-24"
+          }
+        },
+        "required": [
+          "date"
+        ]
+      },
+      "ReconciliationSummaryDto": {
+        "type": "object",
+        "properties": {
+          "csvDepositCount": {
+            "type": "number",
+            "example": 12
+          },
+          "localDepositCount": {
+            "type": "number",
+            "example": 11
+          },
+          "matchedCount": {
+            "type": "number",
+            "example": 10
+          },
+          "mismatchCount": {
+            "type": "number",
+            "example": 2
+          },
+          "duplicateCsvRowsIgnored": {
+            "type": "number",
+            "example": 1
+          }
+        },
+        "required": [
+          "csvDepositCount",
+          "localDepositCount",
+          "matchedCount",
+          "mismatchCount",
+          "duplicateCsvRowsIgnored"
+        ]
+      },
+      "ReconciliationMismatchDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "MISSING_IN_LOCAL",
+              "MISSING_IN_CSV",
+              "AMOUNT_MISMATCH"
+            ],
+            "example": "AMOUNT_MISMATCH"
+          },
+          "reference": {
+            "type": "string",
+            "example": "1382264189"
+          },
+          "csvAmount": {
+            "type": "string",
+            "nullable": true,
+            "example": "50000"
+          },
+          "localAmount": {
+            "type": "string",
+            "nullable": true,
+            "example": "60000"
+          },
+          "depositId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "details": {
+            "type": "string",
+            "example": "Verified local IRT differs from PSP CSV IRT"
+          }
+        },
+        "required": [
+          "type",
+          "reference",
+          "csvAmount",
+          "localAmount",
+          "depositId",
+          "details"
+        ]
+      },
+      "ReconciliationResponseDto": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "example": "2026-11-24"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ReconciliationSummaryDto"
+          },
+          "mismatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationMismatchDto"
+            }
+          }
+        },
+        "required": [
+          "date",
+          "summary",
+          "mismatches"
+        ]
+      }
+    }
+  }
+}

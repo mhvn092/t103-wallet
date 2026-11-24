@@ -20,7 +20,8 @@
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "test:e2e:hostile": "LIVE_SIMULATOR_E2E=true vitest run --config ./vitest.config.e2e.ts test/simulator-hostile.e2e-spec.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node dist/database/migrate.js"
+    "db:migrate": "node dist/database/migrate.js",
+    "openapi:export": "node scripts/export-openapi.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

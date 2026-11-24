@@ -1,0 +1,259 @@
+{
+  "info": {
+    "_postman_id": "a7f3e4d0-103b-4c5d-9e8f-111111111103",
+    "name": "Hamta Pay T-103 Wallet & Ledger API",
+    "description": "Complete Postman v2.1 collection covering mandatory and bonus endpoints for T-103 Wallet & Double-Entry Ledger.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "userId", "value": "user_alice" },
+    { "key": "receiverUserId", "value": "user_bob" },
+    { "key": "depositId", "value": "01900000-0000-7000-8000-000000000001" },
+    { "key": "withdrawalId", "value": "01900000-0000-7000-8000-000000000002" },
+    { "key": "internalApiKey", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health & Probes",
+      "item": [
+        {
+          "name": "Liveness Check (/health)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health"
+          }
+        },
+        {
+          "name": "Kubernetes Liveness (/health/liveness)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health/liveness"
+          }
+        },
+        {
+          "name": "Readiness Check (/ready)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/ready"
+          }
+        },
+        {
+          "name": "Kubernetes Readiness (/health/readiness)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health/readiness"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wallets & Ledger",
+      "item": [
+        {
+          "name": "Get Wallet Balances",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/wallets/{{userId}}"
+          }
+        },
+        {
+          "name": "Get Paginated Ledger Entries",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/wallets/{{userId}}/ledger?limit=20&accountType=AVAILABLE",
+              "host": ["{{baseUrl}}"],
+              "path": ["wallets", "{{userId}}", "ledger"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "accountType", "value": "AVAILABLE" },
+                { "key": "cursor", "value": "", "disabled": true },
+                { "key": "currency", "value": "IRT", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Internal Operations",
+      "item": [
+        {
+          "name": "Manual Balance Adjustment (IRT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" },
+              { "key": "X-Operator-Id", "value": "ops-ehsan" },
+              { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"currency\": \"IRT\",\n  \"amount\": \"500000\",\n  \"reason\": \"deposit delay compensation\"\n}"
+            },
+            "url": "{{baseUrl}}/internal/adjustments"
+          }
+        },
+        {
+          "name": "Manual Balance Adjustment (USDT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" },
+              { "key": "X-Operator-Id", "value": "ops-ehsan" },
+              { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"currency\": \"USDT\",\n  \"amount\": \"25.5\",\n  \"reason\": \"usdt wallet credit\"\n}"
+            },
+            "url": "{{baseUrl}}/internal/adjustments"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Deposits",
+      "item": [
+        {
+          "name": "Initiate IRT Deposit",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"amount\": \"500000\"\n}"
+            },
+            "url": "{{baseUrl}}/deposits"
+          }
+        },
+        {
+          "name": "Get Deposit Detail",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/deposits/{{depositId}}"
+          }
+        },
+        {
+          "name": "PSP Wake-Up Callback",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"psp_tok_example\",\n  \"orderId\": \"dep_example\",\n  \"status\": \"OK\"\n}"
+            },
+            "url": "{{baseUrl}}/webhooks/psp/callback"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Internal P2P Transfers (Bonus)",
+      "item": [
+        {
+          "name": "Transfer Between Users",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fromUserId\": \"{{userId}}\",\n  \"toUserId\": \"{{receiverUserId}}\",\n  \"currency\": \"IRT\",\n  \"amount\": \"150000\"\n}"
+            },
+            "url": "{{baseUrl}}/transfers"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Withdrawals & Webhooks",
+      "item": [
+        {
+          "name": "Create IRT Withdrawal (IBAN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"currency\": \"IRT\",\n  \"amount\": \"250000\",\n  \"destination\": \"IR062960000000100324200001\"\n}"
+            },
+            "url": "{{baseUrl}}/withdrawals"
+          }
+        },
+        {
+          "name": "Create USDT Withdrawal (TRC20 + 1 USDT fee)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"currency\": \"USDT\",\n  \"amount\": \"10.5\",\n  \"destination\": \"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t\"\n}"
+            },
+            "url": "{{baseUrl}}/withdrawals"
+          }
+        },
+        {
+          "name": "Get Withdrawal Status",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/withdrawals/{{withdrawalId}}"
+          }
+        },
+        {
+          "name": "Cancel Pending Withdrawal",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/withdrawals/{{withdrawalId}}/cancel"
+          }
+        },
+        {
+          "name": "Payout Webhook Callback (HMAC Signed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-signature", "value": "<64-char-hex-hmac-sha256-of-raw-body>" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requestId\": \"wd_example\",\n  \"status\": \"SUCCEEDED\",\n  \"trackingId\": \"TRK123456\",\n  \"refId\": \"REF998877\"\n}"
+            },
+            "url": "{{baseUrl}}/webhooks/payout"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reconciliation (Bonus)",
+      "item": [
+        {
+          "name": "Run Daily PSP Settlement Reconciliation",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-11-24\"\n}"
+            },
+            "url": "{{baseUrl}}/reconciliation/run"
+          }
+        }
+      ]
+    }
+  ]
+}
