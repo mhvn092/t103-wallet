@@ -4,7 +4,7 @@ FROM node:24-alpine AS builder
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 COPY tsconfig*.json nest-cli.json drizzle.config.ts ./
 COPY src ./src
@@ -15,11 +15,12 @@ FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY --chown=node:node package*.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force && chown -R node:node /app
 
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder --chown=node:node /app/dist ./dist
+COPY --from=builder --chown=node:node /app/drizzle ./drizzle
 
+USER node
 EXPOSE 3000
 CMD ["sh", "-c", "node dist/database/migrate.js && node dist/main.js"]

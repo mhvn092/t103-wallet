@@ -1,5 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { DomainException } from '../../common/errors/domain.exception.js';
+import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   CURRENCIES,
   type Currency,
@@ -7,7 +9,10 @@ import {
 } from '../../common/utils/money.js';
 import { generateUuidV7 } from '../../common/utils/uuidv7.js';
 import { DatabaseService } from '../../database/database.service.js';
-import type { DbExecutor, DbTransaction } from '../../database/database.types.js';
+import type {
+  DbExecutor,
+  DbTransaction,
+} from '../../database/database.types.js';
 import {
   type AccountRow,
   accounts,
@@ -16,6 +21,8 @@ import {
   userDailyLimits,
   userRestrictions,
 } from '../../database/schema/index.js';
+import { WalletBalancesResponseDto } from './dto/wallet-balance-response.dto.js';
+import { WalletLedgerResponseDto } from './dto/wallet-ledger-response.dto.js';
 import {
   type AccountSpec,
   type SystemOwnerId,
@@ -26,7 +33,7 @@ import {
 
 @Injectable()
 export class WalletService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(private readonly _database: DatabaseService) {}
 
   /**
    * Check-first then sorted autocommit scaffold creation outside TX1 so 0-balance shell rows
@@ -37,53 +44,18 @@ export class WalletService {
     dailyLimitKeys?: Array<{ userId: string; limitDate: string }>;
     restrictionUserIds?: string[];
   }): Promise<void> {
-    const dedupedSpecs = this.sortAccountSpecs(params.accountSpecs);
+    const dedupedSpecs = this._sortAccountSpecs(params.accountSpecs);
     if (dedupedSpecs.length > 0) {
-      const userIds = [...new Set(dedupedSpecs.map((s) => s.userId))];
-      const existing = await this.database.db
-        .select({
-          ownerId: accounts.ownerId,
-          currency: accounts.currency,
-          accountType: accounts.accountType,
-        })
-        .from(accounts)
-        .where(
-          and(
-            eq(accounts.ownerType, 'USER'),
-            inArray(accounts.ownerId, userIds),
-          ),
-        );
-
-      const existingKeys = new Set(
-        existing.map((r) => `${r.ownerId}|${r.currency}|${r.accountType}`),
-      );
-      const missing = dedupedSpecs.filter(
-        (s) => !existingKeys.has(`${s.userId}|${s.currency}|${s.accountType}`),
-      );
-
-      if (missing.length > 0) {
-        await this.database.db
-          .insert(accounts)
-          .values(
-            missing.map((spec) => ({
-              id: generateUuidV7(),
-              ownerType: 'USER',
-              ownerId: spec.userId,
-              currency: spec.currency,
-              accountType: spec.accountType,
-              normalSide: USER_ACCOUNT_NORMAL_SIDE[spec.accountType],
-              balance: '0',
-            })),
-          )
-          .onConflictDoNothing();
-      }
+      await this._ensureMissingAccounts(dedupedSpecs);
     }
 
     if (params.dailyLimitKeys && params.dailyLimitKeys.length > 0) {
       const sortedLimits = [...params.dailyLimitKeys].sort((a, b) =>
-        `${a.userId}|${a.limitDate}`.localeCompare(`${b.userId}|${b.limitDate}`),
+        `${a.userId}|${a.limitDate}`.localeCompare(
+          `${b.userId}|${b.limitDate}`,
+        ),
       );
-      await this.database.db
+      await this._database.db
         .insert(userDailyLimits)
         .values(
           sortedLimits.map((k) => ({
@@ -97,7 +69,7 @@ export class WalletService {
 
     if (params.restrictionUserIds && params.restrictionUserIds.length > 0) {
       const sortedUsers = [...new Set(params.restrictionUserIds)].sort();
-      await this.database.db
+      await this._database.db
         .insert(userRestrictions)
         .values(
           sortedUsers.map((userId) => ({
@@ -116,7 +88,7 @@ export class WalletService {
     tx: DbTransaction,
     specs: AccountSpec[],
   ): Promise<Map<string, AccountRow>> {
-    const sortedSpecs = this.sortAccountSpecs(specs);
+    const sortedSpecs = this._sortAccountSpecs(specs);
     const userIds = [...new Set(sortedSpecs.map((s) => s.userId))];
     const currencies = [...new Set(sortedSpecs.map((s) => s.currency))];
     const accountTypes = [...new Set(sortedSpecs.map((s) => s.accountType))];
@@ -141,12 +113,25 @@ export class WalletService {
     }
 
     for (const spec of sortedSpecs) {
-      const key = `${spec.userId}|${spec.currency}|${spec.accountType}`;
-      if (!map.has(key)) {
-        throw new Error(`Missing scaffolded USER account for ${key}`);
-      }
+      this.getRequiredLockedAccount(map, spec);
     }
     return map;
+  }
+
+  getRequiredLockedAccount(
+    map: ReadonlyMap<string, AccountRow>,
+    spec: AccountSpec,
+  ): AccountRow {
+    const key = `${spec.userId}|${spec.currency}|${spec.accountType}`;
+    const row = map.get(key);
+    if (!row) {
+      throw new DomainException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        ErrorCode.INTERNAL_ERROR,
+        `Missing scaffolded USER account for ${key}`,
+      );
+    }
+    return row;
   }
 
   /**
@@ -170,16 +155,17 @@ export class WalletService {
       .limit(1);
 
     if (!row) {
-      throw new Error(`Seeded SYSTEM account missing: ${ownerId}:${currency}`);
+      throw new DomainException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        ErrorCode.INTERNAL_ERROR,
+        `Seeded SYSTEM account missing: ${ownerId}:${currency}`,
+      );
     }
     return row;
   }
 
-  async getWalletBalances(userId: string): Promise<{
-    userId: string;
-    balances: WalletBalanceView[];
-  }> {
-    const rows = await this.database.db
+  async getWalletBalances(userId: string): Promise<WalletBalancesResponseDto> {
+    const rows = await this._database.db
       .select({
         currency: accounts.currency,
         accountType: accounts.accountType,
@@ -218,7 +204,7 @@ export class WalletService {
     cursor?: bigint;
     accountType?: UserAccountType | 'ALL';
     currency?: Currency;
-  }) {
+  }): Promise<WalletLedgerResponseDto> {
     const accountFilter = params.accountType ?? 'AVAILABLE';
     const conditions = [eq(ledgerItems.userId, params.userId)];
 
@@ -232,7 +218,7 @@ export class WalletService {
       conditions.push(lt(ledgerItems.id, params.cursor));
     }
 
-    const rows = await this.database.db
+    const rows = await this._database.db
       .select({
         id: ledgerItems.id,
         transactionId: ledgerItems.transactionId,
@@ -262,7 +248,7 @@ export class WalletService {
 
     return {
       items: pageRows.map((row) => {
-        const ccy = row.currency as Currency;
+        const ccy: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
         return {
           id: row.id.toString(),
           transactionId: row.transactionId,
@@ -285,9 +271,6 @@ export class WalletService {
     };
   }
 
-  /**
-   * Used in assertions / ops tools: verifies user has no active outbound freeze.
-   */
   async lockUserRestriction(
     tx: DbTransaction,
     userId: string,
@@ -298,6 +281,7 @@ export class WalletService {
       .where(eq(userRestrictions.userId, userId))
       .for('update')
       .limit(1);
+
     return row?.outboundFrozen ?? false;
   }
 
@@ -339,7 +323,47 @@ export class WalletService {
       );
   }
 
-  private sortAccountSpecs(specs: AccountSpec[]): AccountSpec[] {
+  private async _ensureMissingAccounts(
+    dedupedSpecs: AccountSpec[],
+  ): Promise<void> {
+    const userIds = [...new Set(dedupedSpecs.map((s) => s.userId))];
+    const existing = await this._database.db
+      .select({
+        ownerId: accounts.ownerId,
+        currency: accounts.currency,
+        accountType: accounts.accountType,
+      })
+      .from(accounts)
+      .where(
+        and(eq(accounts.ownerType, 'USER'), inArray(accounts.ownerId, userIds)),
+      );
+
+    const existingKeys = new Set(
+      existing.map((r) => `${r.ownerId}|${r.currency}|${r.accountType}`),
+    );
+    const missing = dedupedSpecs.filter(
+      (s) => !existingKeys.has(`${s.userId}|${s.currency}|${s.accountType}`),
+    );
+
+    if (missing.length > 0) {
+      await this._database.db
+        .insert(accounts)
+        .values(
+          missing.map((spec) => ({
+            id: generateUuidV7(),
+            ownerType: 'USER',
+            ownerId: spec.userId,
+            currency: spec.currency,
+            accountType: spec.accountType,
+            normalSide: USER_ACCOUNT_NORMAL_SIDE[spec.accountType],
+            balance: '0',
+          })),
+        )
+        .onConflictDoNothing();
+    }
+  }
+
+  private _sortAccountSpecs(specs: AccountSpec[]): AccountSpec[] {
     const unique = new Map<string, AccountSpec>();
     for (const spec of specs) {
       unique.set(`${spec.userId}|${spec.currency}|${spec.accountType}`, spec);

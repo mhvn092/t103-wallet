@@ -1,9 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
-import { CURRENCIES, type Currency } from '../../common/utils/money.js';
+import { CURRENCIES, type Currency } from '../../../common/utils/money.js';
 
-export class CreateAdjustmentDto {
+export class AdjustmentCreateDto {
   @ApiProperty({ example: 'user_1' })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()

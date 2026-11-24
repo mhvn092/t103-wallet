@@ -14,7 +14,7 @@ export class DatabaseService implements OnModuleDestroy {
 
   constructor(config: ConfigService<EnvConfig, true>) {
     this.pool = new Pool({
-      connectionString: config.get('DATABASE_URL', { infer: true }),
+      connectionString: config.get('DATABASE_URI', { infer: true }),
       max: 25,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
@@ -22,14 +22,29 @@ export class DatabaseService implements OnModuleDestroy {
     this.db = drizzle(this.pool, { schema });
   }
 
-  async runInTransaction<T>(
-    fn: (tx: DbTransaction) => Promise<T>,
-  ): Promise<T> {
+  async runInTransaction<T>(fn: (tx: DbTransaction) => Promise<T>): Promise<T> {
     return this.db.transaction(fn, { isolationLevel: 'read committed' });
   }
 
-  async ping(): Promise<void> {
-    await this.db.execute(sql`SELECT 1`);
+  async ping(timeoutMs: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new Error(
+            `PostgreSQL readiness check timed out after ${timeoutMs}ms`,
+          ),
+        );
+      }, timeoutMs);
+    });
+
+    try {
+      await Promise.race([this.db.execute(sql`SELECT 1`), timeoutPromise]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -1,10 +1,7 @@
 import type { Currency } from '../../common/utils/money.js';
 
-export type OwnerType = 'USER' | 'SYSTEM';
 export type UserAccountType = 'AVAILABLE' | 'LOCKED' | 'RECEIVABLE';
-export type SystemAccountType = 'CLEARING' | 'ADJUSTMENT' | 'REVENUE';
-export type AccountType = UserAccountType | SystemAccountType;
-export type NormalSide = 'DEBIT' | 'CREDIT';
+type NormalSide = 'DEBIT' | 'CREDIT';
 
 export const USER_ACCOUNT_NORMAL_SIDE: Record<UserAccountType, NormalSide> = {
   AVAILABLE: 'CREDIT',
@@ -19,10 +16,7 @@ export interface AccountSpec {
 }
 
 export type SystemOwnerId =
-  | 'PSP_CLEARING'
-  | 'PAYOUT_CLEARING'
-  | 'OPS_ADJUSTMENT'
-  | 'FEE_REVENUE';
+  'PSP_CLEARING' | 'PAYOUT_CLEARING' | 'OPS_ADJUSTMENT' | 'FEE_REVENUE';
 
 export interface WalletBalanceView {
   currency: Currency;

@@ -5,14 +5,10 @@ import { ErrorCode } from '../errors/error-codes.js';
 export const CURRENCIES = ['IRT', 'USDT'] as const;
 export type Currency = (typeof CURRENCIES)[number];
 
-export const USDT_SCALE = 6;
+const USDT_SCALE = 6;
 export const USDT_MINOR_PER_UNIT = 1_000_000n;
 const IRT_REGEX = /^[1-9]\d*$/;
 const USDT_REGEX = /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/;
-
-export function isCurrency(value: unknown): value is Currency {
-  return value === 'IRT' || value === 'USDT';
-}
 
 export function parseAmountToMinor(
   raw: string,
@@ -58,7 +54,11 @@ export function parseAmountToMinor(
 
 export function formatMinorToApi(minor: bigint, currency: Currency): string {
   if (minor < 0n) {
-    throw new Error(`Unexpected negative minor unit: ${minor.toString()}`);
+    throw new DomainException(
+      HttpStatus.INTERNAL_SERVER_ERROR,
+      ErrorCode.INTERNAL_ERROR,
+      `Unexpected negative minor unit: ${minor.toString()}`,
+    );
   }
   if (currency === 'IRT') {
     return minor.toString();
@@ -72,14 +72,6 @@ export function formatMinorToApi(minor: bigint, currency: Currency): string {
     .padStart(USDT_SCALE, '0')
     .replace(/0+$/, '');
   return frac.length > 0 ? `${whole.toString()}.${frac}` : whole.toString();
-}
-
-export function formatMinorFixedUsdt(minor: bigint): string {
-  const whole = minor / USDT_MINOR_PER_UNIT;
-  const frac = (minor % USDT_MINOR_PER_UNIT)
-    .toString()
-    .padStart(USDT_SCALE, '0');
-  return `${whole.toString()}.${frac}`;
 }
 
 export function convertUsdtToIrtCeiling(

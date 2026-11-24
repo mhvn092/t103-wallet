@@ -5,11 +5,18 @@ import type { App } from 'supertest/types.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+import {
+  getRequiredTestDatabaseUri,
+  prepareTestEnv,
+} from './helpers/test-env.js';
 
 describe('App Bootstrap & Error Contract (e2e)', () => {
   let app: INestApplication<App>;
 
   beforeAll(async () => {
+    prepareTestEnv();
+    getRequiredTestDatabaseUri();
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -20,12 +27,25 @@ describe('App Bootstrap & Error Contract (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
   });
 
-  it('GET /health returns 200 ok', async () => {
-    const res = await request(app.getHttpServer()).get('/health').expect(200);
-    expect(res.body.status).toBe('ok');
+  it('GET /health and /health/liveness return 200 ok without leaking environment details', async () => {
+    const legacy = await request(app.getHttpServer())
+      .get('/health')
+      .expect(200);
+    expect(legacy.body).toEqual({
+      status: 'ok',
+      timestamp: expect.any(String),
+    });
+
+    const k8s = await request(app.getHttpServer())
+      .get('/health/liveness')
+      .expect(200);
+    expect(k8s.body).toEqual({
+      status: 'ok',
+      timestamp: expect.any(String),
+    });
   });
 
   it('returns Appendix A {code, message} shape on unknown route', async () => {

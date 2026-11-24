@@ -8,32 +8,38 @@ import { configureApp } from './app.setup.js';
 import type { EnvConfig } from './config/env.validation.js';
 
 async function bootstrap(): Promise<void> {
-  const isProd = process.env.NODE_ENV === 'production';
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
-    logger: new ConsoleLogger({
+    bufferLogs: true,
+  });
+
+  const config = app.get(ConfigService<EnvConfig, true>);
+  const isProd = config.get('APP_ENV', { infer: true }) === 'production';
+
+  app.useLogger(
+    new ConsoleLogger({
       json: isProd,
       logLevels: isProd
         ? ['log', 'warn', 'error', 'fatal']
         : ['log', 'warn', 'error', 'fatal', 'debug'],
     }),
-  });
-
+  );
   app.enableShutdownHooks();
   configureApp(app);
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Hamta Pay T-103 Wallet & Ledger API')
-    .setDescription(
-      'Crypto Exchange Wallet, Double-Entry Ledger, Deposits, Withdrawals, Transfers, and Reconciliation API',
-    )
-    .setVersion('1.0.0')
-    .build();
-  const documentFactory = () =>
-    SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('api/docs', app, documentFactory);
+  if (config.get('SWAGGER_ENABLED', { infer: true })) {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Hamta Pay T-103 Wallet & Ledger API')
+      .setDescription(
+        'Crypto Exchange Wallet, Double-Entry Ledger, Deposits, Withdrawals, Transfers, and Reconciliation API',
+      )
+      .setVersion('1.0.0')
+      .build();
+    const documentFactory = () =>
+      SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('api/docs', app, documentFactory);
+  }
 
-  const config = app.get(ConfigService<EnvConfig, true>);
   const port = config.get('PORT', { infer: true });
 
   const server = app.getHttpServer();

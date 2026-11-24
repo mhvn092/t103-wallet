@@ -67,6 +67,3 @@ export const ledgerItems = pgTable(
       .where(sql`${t.userId} IS NOT NULL`),
   ],
 );
-
-export type LedgerTransactionRow = typeof ledgerTransactions.$inferSelect;
-export type LedgerItemRow = typeof ledgerItems.$inferSelect;

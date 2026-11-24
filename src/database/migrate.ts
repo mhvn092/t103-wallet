@@ -4,10 +4,14 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
 export async function runMigrations(
-  connectionString = process.env.DATABASE_URL ??
-    'postgres://t103:t103_secret@localhost:5432/t103_wallet',
+  connectionString = process.env.DATABASE_URI,
   migrationsFolder = resolve(import.meta.dirname, '../../drizzle'),
 ): Promise<void> {
+  if (!connectionString) {
+    throw new Error(
+      'DATABASE_URI environment variable is required to run migrations',
+    );
+  }
   const pool = new Pool({ connectionString });
   try {
     const db = drizzle(pool);

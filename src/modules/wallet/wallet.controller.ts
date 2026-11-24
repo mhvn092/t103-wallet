@@ -1,29 +1,36 @@
 import { Controller, Get, HttpStatus, Param, Query } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiOkResponse,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
+import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
-import { type Currency, isCurrency } from '../../common/utils/money.js';
+import { WalletBalancesResponseDto } from './dto/wallet-balance-response.dto.js';
+import { WalletLedgerQueryDto } from './dto/wallet-ledger-query.dto.js';
+import { WalletLedgerResponseDto } from './dto/wallet-ledger-response.dto.js';
 import { WalletService } from './wallet.service.js';
-import type { UserAccountType } from './wallet.types.js';
 
-const VALID_ACCOUNT_FILTERS = new Set<string>([
-  'AVAILABLE',
-  'LOCKED',
-  'RECEIVABLE',
-  'ALL',
-]);
-
-@ApiTags('Wallets')
 @Controller('wallets')
+@ApiTags('Wallets')
 export class WalletController {
-  constructor(private readonly walletService: WalletService) {}
+  constructor(private readonly _walletService: WalletService) {}
 
   @Get(':userId')
   @ApiOperation({
     summary: 'Get user IRT & USDT balances (returns 0 balances if unseen)',
   })
-  @ApiResponse({ status: 200, description: 'User wallet balances' })
-  getWallet(@Param('userId') userId: string) {
+  @ApiParam({ name: 'userId', example: 'user_1' })
+  @ApiOkResponse({
+    description: 'User wallet balances',
+    type: WalletBalancesResponseDto,
+  })
+  @ApiErrorResponses(HttpStatus.BAD_REQUEST)
+  getWallet(
+    @Param('userId') userId: string,
+  ): Promise<WalletBalancesResponseDto> {
     const trimmed = userId.trim();
     if (!trimmed) {
       throw new DomainException(
@@ -32,26 +39,21 @@ export class WalletController {
         'userId must be non-empty',
       );
     }
-    return this.walletService.getWalletBalances(trimmed);
+    return this._walletService.getWalletBalances(trimmed);
   }
 
   @Get(':userId/ledger')
   @ApiOperation({ summary: 'Keyset-paginated immutable ledger entries' })
-  @ApiQuery({ name: 'limit', required: false, example: '20' })
-  @ApiQuery({ name: 'cursor', required: false })
-  @ApiQuery({
-    name: 'accountType',
-    required: false,
-    enum: ['AVAILABLE', 'LOCKED', 'RECEIVABLE', 'ALL'],
+  @ApiParam({ name: 'userId', example: 'user_1' })
+  @ApiOkResponse({
+    description: 'Paginated ledger items for the requested user',
+    type: WalletLedgerResponseDto,
   })
-  @ApiQuery({ name: 'currency', required: false, enum: ['IRT', 'USDT'] })
+  @ApiErrorResponses(HttpStatus.BAD_REQUEST)
   getLedger(
     @Param('userId') userId: string,
-    @Query('limit') rawLimit?: string,
-    @Query('cursor') rawCursor?: string,
-    @Query('accountType') rawAccountType?: string,
-    @Query('currency') rawCurrency?: string,
-  ) {
+    @Query() query: WalletLedgerQueryDto,
+  ): Promise<WalletLedgerResponseDto> {
     const trimmedUser = userId.trim();
     if (!trimmedUser) {
       throw new DomainException(
@@ -61,68 +63,12 @@ export class WalletController {
       );
     }
 
-    let limit = 20;
-    if (rawLimit !== undefined && rawLimit !== '') {
-      if (!/^[1-9]\d*$/.test(rawLimit)) {
-        throw new DomainException(
-          HttpStatus.BAD_REQUEST,
-          ErrorCode.INVALID_REQUEST,
-          'limit must be a positive integer between 1 and 100',
-        );
-      }
-      const parsed = Number(rawLimit);
-      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 100) {
-        throw new DomainException(
-          HttpStatus.BAD_REQUEST,
-          ErrorCode.INVALID_REQUEST,
-          'limit must be between 1 and 100',
-        );
-      }
-      limit = parsed;
-    }
-
-    let cursor: bigint | undefined;
-    if (rawCursor !== undefined && rawCursor !== '') {
-      if (!/^[1-9]\d*$/.test(rawCursor)) {
-        throw new DomainException(
-          HttpStatus.BAD_REQUEST,
-          ErrorCode.INVALID_REQUEST,
-          'cursor must be a positive integer ledger item ID',
-        );
-      }
-      cursor = BigInt(rawCursor);
-    }
-
-    let accountType: UserAccountType | 'ALL' = 'AVAILABLE';
-    if (rawAccountType !== undefined && rawAccountType !== '') {
-      if (!VALID_ACCOUNT_FILTERS.has(rawAccountType)) {
-        throw new DomainException(
-          HttpStatus.BAD_REQUEST,
-          ErrorCode.INVALID_REQUEST,
-          'accountType must be AVAILABLE, LOCKED, RECEIVABLE, or ALL',
-        );
-      }
-      accountType = rawAccountType as UserAccountType | 'ALL';
-    }
-
-    let currency: Currency | undefined;
-    if (rawCurrency !== undefined && rawCurrency !== '') {
-      if (!isCurrency(rawCurrency)) {
-        throw new DomainException(
-          HttpStatus.BAD_REQUEST,
-          ErrorCode.INVALID_REQUEST,
-          'currency must be IRT or USDT',
-        );
-      }
-      currency = rawCurrency;
-    }
-
-    return this.walletService.getUserLedger({
+    return this._walletService.getUserLedger({
       userId: trimmedUser,
-      limit,
-      cursor,
-      accountType,
-      currency,
+      limit: query.limit,
+      cursor: query.cursor !== undefined ? BigInt(query.cursor) : undefined,
+      accountType: query.accountType,
+      currency: query.currency,
     });
   }
 }

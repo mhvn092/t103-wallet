@@ -1,68 +1,61 @@
-import { Injectable } from '@nestjs/common';
-import { formatMinorToApi, parseAmountToMinor } from '../../common/utils/money.js';
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { DomainException } from '../../common/errors/domain.exception.js';
+import { ErrorCode } from '../../common/errors/error-codes.js';
+import {
+  formatMinorToApi,
+  parseAmountToMinor,
+} from '../../common/utils/money.js';
 import { generateUuidV7 } from '../../common/utils/uuidv7.js';
 import { adjustments } from '../../database/schema/index.js';
-import { IdempotencyService } from '../idempotency/idempotency.service.js';
+import {
+  IdempotencyService,
+  type IdempotentExecutionResult,
+} from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
-import type { CreateAdjustmentDto } from './adjustment.dto.js';
-
-export interface AdjustmentResponse {
-  adjustmentId: string;
-  userId: string;
-  currency: 'IRT' | 'USDT';
-  amount: string;
-  reason: string;
-  operatorId: string;
-  createdAt: string;
-}
+import type { AdjustmentCreateDto } from './dto/adjustment-create.dto.js';
+import type { AdjustmentResponseDto } from './dto/adjustment-response.dto.js';
 
 @Injectable()
 export class AdjustmentService {
   constructor(
-    private readonly idempotency: IdempotencyService,
-    private readonly walletService: WalletService,
-    private readonly ledgerService: LedgerService,
+    private readonly _idempotency: IdempotencyService,
+    private readonly _walletService: WalletService,
+    private readonly _ledgerService: LedgerService,
   ) {}
 
   async createAdjustment(params: {
     idempotencyKey: string;
-    dto: CreateAdjustmentDto;
+    dto: AdjustmentCreateDto;
     operatorId: string;
-  }) {
+  }): Promise<IdempotentExecutionResult<AdjustmentResponseDto>> {
     const { dto } = params;
     const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
+    const availableSpec = {
+      userId: dto.userId,
+      currency: dto.currency,
+      accountType: 'AVAILABLE' as const,
+    };
 
     // Pre-ensure outside TX1 to avoid rollback bloat or XID deadlocks
-    await this.walletService.ensureUserScaffold({
-      accountSpecs: [
-        {
-          userId: dto.userId,
-          currency: dto.currency,
-          accountType: 'AVAILABLE',
-        },
-      ],
+    await this._walletService.ensureUserScaffold({
+      accountSpecs: [availableSpec],
     });
 
-    return this.idempotency.executeInTransaction<AdjustmentResponse>({
+    return this._idempotency.executeInTransaction<AdjustmentResponseDto>({
       scope: 'POST:/internal/adjustments',
       key: params.idempotencyKey,
       requestBody: dto,
       handler: async (tx) => {
-        const lockedAccounts = await this.walletService.lockUserAccountsCanonical(
-          tx,
-          [
-            {
-              userId: dto.userId,
-              currency: dto.currency,
-              accountType: 'AVAILABLE',
-            },
-          ],
+        const lockedAccounts =
+          await this._walletService.lockUserAccountsCanonical(tx, [
+            availableSpec,
+          ]);
+        const userAvailable = this._walletService.getRequiredLockedAccount(
+          lockedAccounts,
+          availableSpec,
         );
-        const userAvailable = lockedAccounts.get(
-          `${dto.userId}|${dto.currency}|AVAILABLE`,
-        )!;
-        const opsAccount = await this.walletService.getSystemAccount(
+        const opsAccount = await this._walletService.getSystemAccount(
           tx,
           'OPS_ADJUSTMENT',
           dto.currency,
@@ -81,7 +74,15 @@ export class AdjustmentService {
           })
           .returning();
 
-        await this.ledgerService.postTransaction(tx, {
+        if (!adj) {
+          throw new DomainException(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            ErrorCode.INTERNAL_ERROR,
+            'Failed to persist adjustment record',
+          );
+        }
+
+        await this._ledgerService.postTransaction(tx, {
           type: 'OPS_ADJ',
           referenceType: 'ADJUSTMENT',
           referenceId: adjustmentId,
@@ -111,7 +112,7 @@ export class AdjustmentService {
           amount: formatMinorToApi(amountMinor, dto.currency),
           reason: dto.reason,
           operatorId: params.operatorId,
-          createdAt: adj!.createdAt.toISOString(),
+          createdAt: adj.createdAt.toISOString(),
         };
       },
     });

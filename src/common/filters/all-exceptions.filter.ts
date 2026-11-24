@@ -10,6 +10,8 @@ import type { Response } from 'express';
 import { DomainException } from '../errors/domain.exception.js';
 import { ErrorCode, type ErrorCodeValue } from '../errors/error-codes.js';
 
+const VALID_ERROR_CODES = new Set<string>(Object.values(ErrorCode));
+
 const STATUS_TO_DEFAULT_CODE: Readonly<Record<number, ErrorCodeValue>> = {
   [HttpStatus.BAD_REQUEST]: ErrorCode.INVALID_REQUEST,
   [HttpStatus.UNAUTHORIZED]: ErrorCode.UNAUTHORIZED,
@@ -19,24 +21,35 @@ const STATUS_TO_DEFAULT_CODE: Readonly<Record<number, ErrorCodeValue>> = {
   [HttpStatus.UNPROCESSABLE_ENTITY]: ErrorCode.INVALID_REQUEST,
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function toErrorCode(value: unknown): ErrorCodeValue | undefined {
+  if (typeof value === 'string' && VALID_ERROR_CODES.has(value)) {
+    return Object.values(ErrorCode).find((code) => code === value);
+  }
+  return undefined;
+}
+
 function extractMessage(body: string | object, fallback: string): string {
   if (typeof body === 'string') {
     return body;
   }
-  const candidate = (body as { message?: string | string[] }).message;
-  if (Array.isArray(candidate)) {
-    return candidate.join('; ');
-  }
-  if (typeof candidate === 'string' && candidate.length > 0) {
-    return candidate;
+  if (isRecord(body) && 'message' in body) {
+    const candidate = body.message;
+    if (Array.isArray(candidate)) {
+      return candidate.filter((item) => typeof item === 'string').join('; ');
+    }
+    if (typeof candidate === 'string' && candidate.length > 0) {
+      return candidate;
+    }
   }
   return fallback;
 }
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
-  private readonly logger = new Logger(AllExceptionsFilter.name);
-
   catch(exception: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
 
@@ -49,30 +62,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     if (exception instanceof HttpException) {
-      const status = exception.getStatus();
-      const body = exception.getResponse();
-      const customCode =
-        typeof body === 'object' &&
-        body !== null &&
-        typeof (body as { code?: unknown }).code === 'string'
-          ? ((body as { code: string }).code as ErrorCodeValue)
-          : undefined;
-      const code =
-        customCode ??
-        STATUS_TO_DEFAULT_CODE[status] ??
-        (status >= 500 ? ErrorCode.INTERNAL_ERROR : ErrorCode.INVALID_REQUEST);
-
-      res.status(status).json({
-        code,
-        message: extractMessage(body, exception.message),
-      });
+      this._handleHttpException(exception, res);
       return;
     }
 
     if (
       exception instanceof SyntaxError &&
       'status' in exception &&
-      (exception as { status?: number }).status === 400
+      exception.status === 400
     ) {
       res.status(HttpStatus.BAD_REQUEST).json({
         code: ErrorCode.INVALID_REQUEST,
@@ -81,7 +78,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return;
     }
 
-    this.logger.error(
+    this._logger.error(
       'Unhandled exception',
       exception instanceof Error ? exception.stack : String(exception),
     );
@@ -90,4 +87,20 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message: 'Internal server error',
     });
   }
+
+  private _handleHttpException(exception: HttpException, res: Response): void {
+    const status = exception.getStatus();
+    const body = exception.getResponse();
+    const customCode = isRecord(body) ? toErrorCode(body.code) : undefined;
+    const defaultCode =
+      STATUS_TO_DEFAULT_CODE[status] ??
+      (status >= 500 ? ErrorCode.INTERNAL_ERROR : ErrorCode.INVALID_REQUEST);
+
+    res.status(status).json({
+      code: customCode ?? defaultCode,
+      message: extractMessage(body, exception.message),
+    });
+  }
+
+  private readonly _logger = new Logger(AllExceptionsFilter.name);
 }

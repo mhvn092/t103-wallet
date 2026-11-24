@@ -15,6 +15,17 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
+function auditTimestamps() {
+  return {
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  };
+}
+
 export const idempotencyKeys = pgTable(
   'idempotency_keys',
   {
@@ -55,17 +66,14 @@ export const deposits = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     nextPollAt: timestamp('next_poll_at', { withTimezone: true }),
     verifiedAt: timestamp('verified_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
+    ...auditTimestamps(),
   },
   (t) => [
     index('deposits_poll_idx')
       .on(t.nextPollAt)
-      .where(sql`${t.status} IN ('INITIATED', 'AWAITING_PAYMENT', 'VERIFYING')`),
+      .where(
+        sql`${t.status} IN ('INITIATED', 'AWAITING_PAYMENT', 'VERIFYING')`,
+      ),
     index('deposits_verified_at_idx')
       .on(t.verifiedAt)
       .where(sql`${t.status} = 'SUCCEEDED'`),
@@ -103,12 +111,7 @@ export const withdrawals = pgTable(
       .default(sql`1`),
     leaseUntil: timestamp('lease_until', { withTimezone: true }),
     nextPollAt: timestamp('next_poll_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
+    ...auditTimestamps(),
   },
   (t) => [
     index('withdrawals_dispatch_idx')
@@ -151,7 +154,9 @@ export const financialDiscrepancies = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index('financial_discrepancies_user_status_idx').on(t.userId, t.status)],
+  (t) => [
+    index('financial_discrepancies_user_status_idx').on(t.userId, t.status),
+  ],
 );
 
 export const transfers = pgTable(

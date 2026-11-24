@@ -56,4 +56,3 @@ export const userRestrictions = pgTable('user_restrictions', {
 });
 
 export type AccountRow = typeof accounts.$inferSelect;
-export type NewAccountRow = typeof accounts.$inferInsert;

@@ -1,7 +1,8 @@
+import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
+  USDT_MINOR_PER_UNIT,
   convertUsdtToIrtCeiling,
-  formatMinorFixedUsdt,
   formatMinorToApi,
   parseAmountToMinor,
 } from './money.js';
@@ -20,9 +21,7 @@ describe('money utilities', () => {
     expect(parseAmountToMinor('10', 'USDT')).toBe(10_000_000n);
     expect(parseAmountToMinor('0.1', 'USDT')).toBe(100_000n);
     expect(parseAmountToMinor('0.000001', 'USDT')).toBe(1n);
-    expect(parseAmountToMinor('123456.789012', 'USDT')).toBe(
-      123_456_789_012n,
-    );
+    expect(parseAmountToMinor('123456.789012', 'USDT')).toBe(123_456_789_012n);
     expect(() => parseAmountToMinor('1.1234567', 'USDT')).toThrow();
     expect(() => parseAmountToMinor('0.000000', 'USDT')).toThrow();
   });
@@ -33,7 +32,6 @@ describe('money utilities', () => {
     expect(formatMinorToApi(50_000_000n, 'USDT')).toBe('50');
     expect(formatMinorToApi(10_500_000n, 'USDT')).toBe('10.5');
     expect(formatMinorToApi(1n, 'USDT')).toBe('0.000001');
-    expect(formatMinorFixedUsdt(10_500_000n)).toBe('10.500000');
   });
 
   it('computes ceiling integer USDT->IRT conversion', () => {
@@ -41,5 +39,36 @@ describe('money utilities', () => {
     expect(convertUsdtToIrtCeiling(1n, 60_000n)).toBe(1n);
     expect(convertUsdtToIrtCeiling(16n, 60_000n)).toBe(1n);
     expect(convertUsdtToIrtCeiling(17n, 60_000n)).toBe(2n);
+  });
+
+  it('round-trips arbitrary positive IRT and USDT minor units and preserves ceiling inequalities', () => {
+    fc.assert(
+      fc.property(fc.bigInt({ min: 1n, max: 10n ** 15n }), (minor) => {
+        expect(parseAmountToMinor(formatMinorToApi(minor, 'IRT'), 'IRT')).toBe(
+          minor,
+        );
+      }),
+    );
+
+    fc.assert(
+      fc.property(fc.bigInt({ min: 1n, max: 10n ** 15n }), (minor) => {
+        expect(
+          parseAmountToMinor(formatMinorToApi(minor, 'USDT'), 'USDT'),
+        ).toBe(minor);
+      }),
+    );
+
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 10n ** 12n }),
+        fc.bigInt({ min: 1n, max: 1_000_000n }),
+        (usdtMinor, fxRate) => {
+          const irt = convertUsdtToIrtCeiling(usdtMinor, fxRate);
+          const numerator = usdtMinor * fxRate;
+          expect(irt * USDT_MINOR_PER_UNIT >= numerator).toBe(true);
+          expect((irt - 1n) * USDT_MINOR_PER_UNIT < numerator).toBe(true);
+        },
+      ),
+    );
   });
 });

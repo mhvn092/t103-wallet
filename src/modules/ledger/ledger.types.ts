@@ -12,10 +12,7 @@ export type LedgerTxType =
   | 'TRANSFER';
 
 export type LedgerRefType =
-  | 'DEPOSIT'
-  | 'WITHDRAWAL'
-  | 'ADJUSTMENT'
-  | 'TRANSFER';
+  'DEPOSIT' | 'WITHDRAWAL' | 'ADJUSTMENT' | 'TRANSFER';
 
 export type LedgerDirection = 'DEBIT' | 'CREDIT';
 

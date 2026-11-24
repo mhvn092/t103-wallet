@@ -15,22 +15,16 @@ export interface IdempotentExecutionResult<T> {
   body: T;
 }
 
-export type LeasedClaimResult<T> =
-  | { kind: 'CLAIMED' }
-  | { kind: 'REPLAY'; statusCode: number; body: T };
+type ExistingRecordOutcome<T> =
+  { kind: 'REPLAY'; statusCode: number; body: T } | { kind: 'IN_PROGRESS' };
 
 @Injectable()
 export class IdempotencyService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(private readonly _database: DatabaseService) {}
 
   /**
    * Executes a DB-only mutating operation inside a READ COMMITTED transaction whose
    * VERY FIRST statement claims `(scope, key)` in `idempotency_keys`.
-   *
-   * PostgreSQL's primary-key index blocks concurrent identical retries until the first
-   * transaction commits or rolls back, ensuring:
-   * - Concurrent identical retries replay the committed 201 before reading balances.
-   * - Business 4xx rejections roll back cleanly uncached so callers can fix & retry.
    */
   async executeInTransaction<T>(params: {
     scope: string;
@@ -43,7 +37,7 @@ export class IdempotencyService {
     const expiresAt = new Date(Date.now() + DEFAULT_TTL_MS);
     const targetStatus = params.statusCode ?? HttpStatus.CREATED;
 
-    return this.database.runInTransaction(async (tx) => {
+    return this._database.runInTransaction(async (tx) => {
       const [claimed] = await tx
         .insert(idempotencyKeys)
         .values({
@@ -59,45 +53,25 @@ export class IdempotencyService {
         .returning();
 
       if (!claimed) {
-        const [existing] = await tx
-          .select()
-          .from(idempotencyKeys)
-          .where(
-            and(
-              eq(idempotencyKeys.scope, params.scope),
-              eq(idempotencyKeys.key, params.key),
-            ),
-          )
-          .limit(1);
-
-        if (!existing) {
-          throw new DomainException(
-            HttpStatus.CONFLICT,
-            ErrorCode.IDEMPOTENCY_IN_PROGRESS,
-            'Concurrent request in progress for this Idempotency-Key',
-          );
-        }
-
-        if (existing.requestHash !== requestHash) {
-          throw new DomainException(
-            HttpStatus.UNPROCESSABLE_ENTITY,
-            ErrorCode.IDEMPOTENCY_KEY_REUSED,
-            'Idempotency-Key was already used with a different request payload',
-          );
-        }
-
-        if (existing.status !== 'COMPLETED' || existing.responseBody === null) {
+        const outcome = await this._resolveExistingRecord<T>({
+          tx,
+          scope: params.scope,
+          key: params.key,
+          requestHash,
+          fallbackStatus: targetStatus,
+          lockForUpdate: false,
+        });
+        if (outcome.kind === 'IN_PROGRESS') {
           throw new DomainException(
             HttpStatus.CONFLICT,
             ErrorCode.IDEMPOTENCY_IN_PROGRESS,
             'Request with this Idempotency-Key is currently in progress',
           );
         }
-
         return {
           replayed: true,
-          statusCode: existing.responseStatus ?? targetStatus,
-          body: existing.responseBody as T,
+          statusCode: outcome.statusCode,
+          body: outcome.body,
         };
       }
 
@@ -108,7 +82,7 @@ export class IdempotencyService {
         .set({
           status: 'COMPLETED',
           responseStatus: targetStatus,
-          responseBody: body as unknown,
+          responseBody: body,
         })
         .where(
           and(
@@ -134,13 +108,15 @@ export class IdempotencyService {
     key: string;
     requestBody: unknown;
     leaseMs?: number;
-  }): Promise<LeasedClaimResult<T>> {
+  }): Promise<
+    { kind: 'CLAIMED' } | { kind: 'REPLAY'; statusCode: number; body: T }
+  > {
     const requestHash = sha256CanonicalJson(params.requestBody);
     const now = new Date();
     const lockedUntil = new Date(now.getTime() + (params.leaseMs ?? 60_000));
     const expiresAt = new Date(now.getTime() + DEFAULT_TTL_MS);
 
-    return this.database.runInTransaction(async (tx) => {
+    return this._database.runInTransaction(async (tx) => {
       const [inserted] = await tx
         .insert(idempotencyKeys)
         .values({
@@ -160,48 +136,21 @@ export class IdempotencyService {
         return { kind: 'CLAIMED' };
       }
 
-      const [existing] = await tx
-        .select()
-        .from(idempotencyKeys)
-        .where(
-          and(
-            eq(idempotencyKeys.scope, params.scope),
-            eq(idempotencyKeys.key, params.key),
-          ),
-        )
-        .for('update')
-        .limit(1);
-
-      if (!existing) {
-        throw new DomainException(
-          HttpStatus.CONFLICT,
-          ErrorCode.IDEMPOTENCY_IN_PROGRESS,
-          'Concurrent request in progress for this Idempotency-Key',
-        );
+      const outcome = await this._resolveExistingRecord<T>({
+        tx,
+        scope: params.scope,
+        key: params.key,
+        requestHash,
+        fallbackStatus: HttpStatus.CREATED,
+        lockForUpdate: true,
+      });
+      if (outcome.kind === 'REPLAY') {
+        return outcome;
       }
 
-      if (existing.requestHash !== requestHash) {
-        throw new DomainException(
-          HttpStatus.UNPROCESSABLE_ENTITY,
-          ErrorCode.IDEMPOTENCY_KEY_REUSED,
-          'Idempotency-Key was already used with a different request payload',
-        );
-      }
-
-      if (existing.status === 'COMPLETED' && existing.responseBody !== null) {
-        return {
-          kind: 'REPLAY',
-          statusCode: existing.responseStatus ?? HttpStatus.CREATED,
-          body: existing.responseBody as T,
-        };
-      }
-
-      // Allow crash recovery once locked_until expires
       const reclaimed = await tx
         .update(idempotencyKeys)
-        .set({
-          lockedUntil,
-        })
+        .set({ lockedUntil })
         .where(
           and(
             eq(idempotencyKeys.scope, params.scope),
@@ -234,13 +183,13 @@ export class IdempotencyService {
     body: T;
     executor?: DbTransaction;
   }): Promise<void> {
-    const db = params.executor ?? this.database.db;
+    const db = params.executor ?? this._database.db;
     await db
       .update(idempotencyKeys)
       .set({
         status: 'COMPLETED',
         responseStatus: params.statusCode,
-        responseBody: params.body as unknown,
+        responseBody: params.body,
         lockedUntil: null,
       })
       .where(
@@ -252,7 +201,7 @@ export class IdempotencyService {
   }
 
   async releaseLeased(scope: string, key: string): Promise<void> {
-    await this.database.db
+    await this._database.db
       .delete(idempotencyKeys)
       .where(
         and(
@@ -261,5 +210,54 @@ export class IdempotencyService {
           eq(idempotencyKeys.status, 'IN_PROGRESS'),
         ),
       );
+  }
+
+  private async _resolveExistingRecord<T>(params: {
+    tx: DbTransaction;
+    scope: string;
+    key: string;
+    requestHash: string;
+    fallbackStatus: number;
+    lockForUpdate: boolean;
+  }): Promise<ExistingRecordOutcome<T>> {
+    const baseQuery = params.tx
+      .select()
+      .from(idempotencyKeys)
+      .where(
+        and(
+          eq(idempotencyKeys.scope, params.scope),
+          eq(idempotencyKeys.key, params.key),
+        ),
+      );
+
+    const [existing] = params.lockForUpdate
+      ? await baseQuery.for('update').limit(1)
+      : await baseQuery.limit(1);
+
+    if (!existing) {
+      throw new DomainException(
+        HttpStatus.CONFLICT,
+        ErrorCode.IDEMPOTENCY_IN_PROGRESS,
+        'Concurrent request in progress for this Idempotency-Key',
+      );
+    }
+
+    if (existing.requestHash !== params.requestHash) {
+      throw new DomainException(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        ErrorCode.IDEMPOTENCY_KEY_REUSED,
+        'Idempotency-Key was already used with a different request payload',
+      );
+    }
+
+    if (existing.status === 'COMPLETED' && existing.responseBody !== null) {
+      return {
+        kind: 'REPLAY',
+        statusCode: existing.responseStatus ?? params.fallbackStatus,
+        body: existing.responseBody as T,
+      };
+    }
+
+    return { kind: 'IN_PROGRESS' };
   }
 }

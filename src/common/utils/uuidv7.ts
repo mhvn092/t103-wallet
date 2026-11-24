@@ -4,8 +4,12 @@ let lastMs = 0;
 let seq = 0;
 
 /**
- * Generates an RFC-9562 time-ordered UUIDv7 string with monotonic sub-millisecond ordering
- * within a single process so B-tree inserts stay sequential.
+ * Generates an RFC-9562 time-ordered UUIDv7 string with monotonic sub-millisecond
+ * ordering within a single process so B-tree inserts stay sequential.
+ *
+ * Statelessness note: module-local `lastMs`/`seq` exist solely to keep same-millisecond
+ * ordering monotonic for B-tree locality; each ID carries 62 bits of CSPRNG entropy so
+ * resets or multi-replica Kubernetes scaling never cause collisions or correctness issues.
  */
 export function generateUuidV7(): string {
   const nowMs = Date.now();
