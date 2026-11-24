@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { expect } from 'vitest';
-import type { Currency } from '../../src/common/utils/money.js';
+import type { Currency } from '../../src/common/utils/money.util.js';
 
 export async function assertGlobalFinancialInvariants(
   pool: Pool,

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { HttpStatus } from '@nestjs/common';
 import { DomainException } from '../errors/domain.exception.js';
 import { ErrorCode } from '../errors/error-codes.js';
-import type { Currency } from './money.js';
+import type { Currency } from './money.util.js';
 
 const IR_IBAN_REGEX = /^IR\d{24}$/;
 const TRC20_REGEX = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;

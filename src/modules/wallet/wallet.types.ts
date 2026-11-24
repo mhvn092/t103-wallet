@@ -1,4 +1,4 @@
-import type { Currency } from '../../common/utils/money.js';
+import type { Currency } from '../../common/utils/money.util.js';
 
 export type UserAccountType = 'AVAILABLE' | 'LOCKED' | 'RECEIVABLE';
 type NormalSide = 'DEBIT' | 'CREDIT';

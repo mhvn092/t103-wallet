@@ -1,5 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
-import { getCorrelationId } from '../../common/context/request-context.js';
+import { getCorrelationId } from '../../common/context/request-context.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 
 type HttpJsonOutcome =

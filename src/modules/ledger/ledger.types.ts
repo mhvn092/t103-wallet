@@ -1,5 +1,5 @@
-import type { Currency } from '../../common/utils/money.js';
-import type { AccountRow } from '../../database/schema/index.js';
+import type { Currency } from '../../common/utils/money.util.js';
+import type { AccountEntity } from '../../database/schema/index.js';
 
 export type LedgerTxType =
   | 'DEPOSIT'
@@ -18,7 +18,7 @@ export type LedgerRefType =
 export type LedgerDirection = 'DEBIT' | 'CREDIT';
 
 export interface LedgerPostingLine {
-  account: AccountRow;
+  account: AccountEntity;
   direction: LedgerDirection;
   amount: bigint;
 }

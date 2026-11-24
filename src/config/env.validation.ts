@@ -1,7 +1,5 @@
 import { z } from 'zod';
-
-const emptyToUndefined = (value: unknown): unknown =>
-  typeof value === 'string' && value.trim() === '' ? undefined : value;
+import { emptyToUndefined } from '../common/utils/string-normalizer.util.js';
 
 const httpUrlSchema = z.url().refine((value) => /^https?:\/\//i.test(value), {
   message: 'URL must use http:// or https:// scheme',

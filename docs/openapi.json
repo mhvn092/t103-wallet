@@ -735,6 +735,16 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
           }
         },
         "summary": "Unsigned PSP wake-up callback (verifies via PSP API)",

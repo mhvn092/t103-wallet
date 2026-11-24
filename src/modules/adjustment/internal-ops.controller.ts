@@ -19,14 +19,10 @@ import type { Response } from 'express';
 import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
 import { RequireIdempotencyKey } from '../idempotency/idempotency.decorator.js';
 import { InternalMetricsResponseDto } from './dto/internal-metrics-response.dto.js';
-import {
-  ReceivableSettleDto,
-  ReceivableSettleResponseDto,
-} from './dto/receivable-settle.dto.js';
-import {
-  WithdrawalsPauseDto,
-  WithdrawalsPauseResponseDto,
-} from './dto/withdrawals-pause.dto.js';
+import { ReceivableSettleResponseDto } from './dto/receivable-settle-response.dto.js';
+import { ReceivableSettleDto } from './dto/receivable-settle.dto.js';
+import { WithdrawalsPauseResponseDto } from './dto/withdrawals-pause-response.dto.js';
+import { WithdrawalsPauseDto } from './dto/withdrawals-pause.dto.js';
 import { InternalOpsGuard } from './internal-ops.guard.js';
 import { InternalOpsService } from './internal-ops.service.js';
 
@@ -55,6 +51,7 @@ export class InternalOpsController {
     HttpStatus.CONFLICT,
     HttpStatus.UNPROCESSABLE_ENTITY,
   )
+  @HttpCode(HttpStatus.OK)
   async settleReceivable(
     @RequireIdempotencyKey() idempotencyKey: string,
     @Body() dto: ReceivableSettleDto,

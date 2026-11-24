@@ -1,4 +1,8 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import {
+  BeforeApplicationShutdown,
+  HttpStatus,
+  Injectable,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DomainException } from '../common/errors/domain.exception.js';
 import { ErrorCode } from '../common/errors/error-codes.js';
@@ -10,11 +14,15 @@ import type {
 } from './dto/health-response.dto.js';
 
 @Injectable()
-export class HealthService {
+export class HealthService implements BeforeApplicationShutdown {
   constructor(
-    private readonly _config: ConfigService<EnvConfig, true>,
-    private readonly _db: DatabaseService,
+    private readonly _configService: ConfigService<EnvConfig, true>,
+    private readonly _databaseService: DatabaseService,
   ) {}
+
+  beforeApplicationShutdown(): void {
+    this._isShuttingDown = true;
+  }
 
   getLiveness(): HealthLivenessResponseDto {
     return {
@@ -24,11 +32,19 @@ export class HealthService {
   }
 
   async getReadiness(): Promise<HealthReadinessResponseDto> {
-    const timeoutMs = this._config.get('READINESS_DB_TIMEOUT_MS', {
+    if (this._isShuttingDown) {
+      throw new DomainException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        ErrorCode.PROVIDER_UNAVAILABLE,
+        'Service is shutting down',
+      );
+    }
+
+    const timeoutMs = this._configService.get('READINESS_DB_TIMEOUT_MS', {
       infer: true,
     });
     try {
-      await this._db.ping(timeoutMs);
+      await this._databaseService.ping(timeoutMs);
       return {
         status: 'ready',
         database: 'ok',
@@ -42,4 +58,6 @@ export class HealthService {
       );
     }
   }
+
+  private _isShuttingDown = false;
 }

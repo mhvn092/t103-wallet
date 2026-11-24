@@ -6,7 +6,7 @@ import {
   convertUsdtToIrtCeiling,
   formatMinorToApi,
   parseAmountToMinor,
-} from './money.js';
+} from './money.util.js';
 
 describe('money utilities', () => {
   it('parses IRT positive integer strings and rejects floats/zero/negatives/overflow', () => {

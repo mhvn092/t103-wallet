@@ -10,7 +10,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { accounts } from './accounts.js';
+import { accounts } from './accounts.schema.js';
 
 export const ledgerTransactions = pgTable(
   'ledger_transactions',
@@ -29,6 +29,7 @@ export const ledgerTransactions = pgTable(
       .defaultNow(),
   },
   (t) => [
+    // Migration 0004 attaches INCLUDE (id) for index-only prior-settlement existence checks
     uniqueIndex('ledger_tx_ref_type_uq').on(
       t.referenceType,
       t.referenceId,
@@ -60,8 +61,9 @@ export const ledgerItems = pgTable(
       .defaultNow(),
   },
   (t) => [
+    // Migration 0004 attaches INCLUDE (currency, direction, amount) for deferred commit checks
     index('ledger_items_tx_idx').on(t.transactionId),
-    index('ledger_items_account_cursor_idx').on(t.accountId, t.id.desc()),
+    // Migration 0004 attaches INCLUDE (transaction_id, currency, direction, amount, balance_after)
     index('ledger_items_user_cursor_idx')
       .on(t.userId, t.accountType, t.id.desc())
       .where(sql`${t.userId} IS NOT NULL`),

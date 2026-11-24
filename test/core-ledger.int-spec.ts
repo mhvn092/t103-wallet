@@ -14,7 +14,7 @@ import {
 } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
-import { generateUuidV7 } from '../src/common/utils/uuidv7.js';
+import { generateUuidV7 } from '../src/common/utils/uuidv7.util.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
 import { RetentionWorker } from '../src/modules/idempotency/retention.worker.js';

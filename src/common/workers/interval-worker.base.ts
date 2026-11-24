@@ -5,10 +5,14 @@ import type { EnvConfig } from '../../config/env.validation.js';
 export abstract class IntervalWorkerBase
   implements OnModuleInit, OnModuleDestroy
 {
-  constructor(private readonly _workerConfig: ConfigService<EnvConfig, true>) {}
+  protected abstract readonly workerName: string;
+
+  constructor(
+    private readonly _workerConfigService: ConfigService<EnvConfig, true>,
+  ) {}
 
   onModuleInit(): void {
-    if (!this._workerConfig.get('WORKERS_ENABLED', { infer: true })) {
+    if (!this._workerConfigService.get('WORKERS_ENABLED', { infer: true })) {
       return;
     }
     this._stopped = false;
@@ -26,16 +30,18 @@ export abstract class IntervalWorkerBase
     }
   }
 
-  protected abstract readonly workerName: string;
   protected abstract runTick(): Promise<void>;
 
   private _scheduleNext(): void {
     if (this._stopped) {
       return;
     }
-    const intervalMs = this._workerConfig.get('WORKER_POLL_INTERVAL_MS', {
-      infer: true,
-    });
+    const intervalMs = this._workerConfigService.get(
+      'WORKER_POLL_INTERVAL_MS',
+      {
+        infer: true,
+      },
+    );
     this._timer = setTimeout(() => {
       this._inFlight = this._executeTick().finally(() => {
         this._inFlight = undefined;

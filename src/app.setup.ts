@@ -1,30 +1,13 @@
-import {
-  HttpStatus,
-  INestApplication,
-  ValidationError,
-  ValidationPipe,
-} from '@nestjs/common';
+import { HttpStatus, INestApplication, ValidationPipe } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
 import {
   resolveCorrelationId,
   runWithRequestContext,
-} from './common/context/request-context.js';
+} from './common/context/request-context.util.js';
 import { DomainException } from './common/errors/domain.exception.js';
 import { ErrorCode } from './common/errors/error-codes.js';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter.js';
-
-function flattenValidationErrors(errors: ValidationError[]): string {
-  return errors
-    .flatMap((err) => {
-      const own = err.constraints ? Object.values(err.constraints) : [];
-      const children = err.children?.length
-        ? [flattenValidationErrors(err.children)]
-        : [];
-      return [...own, ...children];
-    })
-    .filter((msg) => msg.length > 0)
-    .join('; ');
-}
+import { flattenValidationErrors } from './common/utils/validation-error.util.js';
 
 export function configureApp(app: INestApplication): void {
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -40,7 +23,7 @@ export function configureApp(app: INestApplication): void {
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
-      exceptionFactory: (errors: ValidationError[]) => {
+      exceptionFactory: (errors) => {
         const message = flattenValidationErrors(errors) || 'Validation failed';
         return new DomainException(
           HttpStatus.BAD_REQUEST,

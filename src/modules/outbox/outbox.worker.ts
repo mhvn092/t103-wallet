@@ -11,21 +11,21 @@ export class OutboxWorker extends IntervalWorkerBase {
   protected readonly workerName = OutboxWorker.name;
 
   constructor(
-    private readonly _config: ConfigService<EnvConfig, true>,
-    private readonly _publisher: OutboxPublisherService,
-    private readonly _broker: AmqpBrokerClient,
-    private readonly _consumer: BalanceEventConsumerService,
+    private readonly _configService: ConfigService<EnvConfig, true>,
+    private readonly _outboxPublisherService: OutboxPublisherService,
+    private readonly _amqpBrokerClient: AmqpBrokerClient,
+    private readonly _balanceEventConsumerService: BalanceEventConsumerService,
   ) {
-    super(_config);
+    super(_configService);
   }
 
   override onModuleInit(): void {
     super.onModuleInit();
-    if (!this._config.get('WORKERS_ENABLED', { infer: true })) {
+    if (!this._configService.get('WORKERS_ENABLED', { infer: true })) {
       return;
     }
-    void this._broker.startConsumer(async ({ eventId, payload }) => {
-      await this._consumer.processEvent({
+    void this._amqpBrokerClient.startConsumer(async ({ eventId, payload }) => {
+      await this._balanceEventConsumerService.processEvent({
         eventId,
         consumerName: 't103-balance-audit-consumer',
         payload,
@@ -34,6 +34,6 @@ export class OutboxWorker extends IntervalWorkerBase {
   }
 
   protected async runTick(): Promise<void> {
-    await this._publisher.publishPendingBatch();
+    await this._outboxPublisherService.publishPendingBatch();
   }
 }

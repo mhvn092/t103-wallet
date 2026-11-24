@@ -8,19 +8,18 @@ import {
   connect,
 } from 'amqplib';
 import type { EnvConfig } from '../../config/env.validation.js';
-
-const OUTBOX_EXCHANGE = 't103.wallet.events';
-const OUTBOX_QUEUE = 't103.balance.audit';
-const BALANCE_CHANGED_ROUTING_KEY = 'balance.changed';
-
-function sanitizeBrokerError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  return raw.replace(/amqps?:\/\/[^\s]+/gi, '[REDACTED_AMQP_URI]');
-}
+import { sanitizeBrokerError } from './amqp-error.util.js';
+import {
+  BALANCE_CHANGED_ROUTING_KEY,
+  OUTBOX_EXCHANGE,
+  OUTBOX_QUEUE,
+} from './outbox.constants.js';
 
 @Injectable()
 export class AmqpBrokerClient implements OnModuleDestroy {
-  constructor(private readonly _config: ConfigService<EnvConfig, true>) {}
+  constructor(
+    private readonly _configService: ConfigService<EnvConfig, true>,
+  ) {}
 
   async publishEvent(
     eventId: string,
@@ -73,7 +72,7 @@ export class AmqpBrokerClient implements OnModuleDestroy {
     if (this._connection) {
       return this._connection;
     }
-    const uri = this._config.get('RABBITMQ_URI', { infer: true });
+    const uri = this._configService.get('RABBITMQ_URI', { infer: true });
     const conn = await connect(uri, { timeout: 5_000 });
     conn.on('error', (err) => {
       this._logger.warn(`AMQP connection error: ${sanitizeBrokerError(err)}`);

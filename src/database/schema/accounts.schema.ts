@@ -25,6 +25,7 @@ export const accounts = pgTable(
       .defaultNow(),
   },
   (t) => [
+    // Migration 0004 attaches INCLUDE (id) while keeping mutable balance out of INCLUDE to preserve HOT updates
     uniqueIndex('accounts_owner_currency_type_uq').on(
       t.ownerType,
       t.ownerId,
@@ -55,4 +56,4 @@ export const userRestrictions = pgTable('user_restrictions', {
     .defaultNow(),
 });
 
-export type AccountRow = typeof accounts.$inferSelect;
+export type AccountEntity = typeof accounts.$inferSelect;

@@ -26,8 +26,12 @@ async function ensureLeastPrivilegeAppRole(
     }
 
     await client.query(
-      "SELECT set_config('t103.app_role', $1, true), set_config('t103.app_pass', $2, true)",
-      [appUser, appPassword],
+      "SELECT set_config('t103.app_role', $1, true), set_config('t103.app_pass', $2, true), set_config('t103.rotate_app_pass', $3, true)",
+      [
+        appUser,
+        appPassword,
+        process.env.POSTGRES_ROTATE_APP_PASSWORD === 'true' ? 'true' : 'false',
+      ],
     );
 
     await client.query(`
@@ -35,20 +39,34 @@ async function ensureLeastPrivilegeAppRole(
       DECLARE
         v_role text := current_setting('t103.app_role', true);
         v_pass text := current_setting('t103.app_pass', true);
+        v_rotate text := current_setting('t103.rotate_app_pass', true);
         v_db text := current_database();
+        v_needs_attr_fix boolean := false;
       BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN
           EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', v_role, v_pass);
         ELSE
-          EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', v_role, v_pass);
+          SELECT (NOT rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolinherit)
+          INTO v_needs_attr_fix
+          FROM pg_roles
+          WHERE rolname = v_role;
+          IF v_needs_attr_fix THEN
+            EXECUTE format('ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', v_role);
+          END IF;
+          IF v_rotate = 'true' THEN
+            EXECUTE format('ALTER ROLE %I WITH PASSWORD %L', v_role, v_pass);
+          END IF;
         END IF;
         EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', v_db, v_role);
         EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', v_role);
         EXECUTE format('REVOKE CREATE ON SCHEMA public FROM %I', v_role);
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %I', v_role);
+        EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', v_role);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO %I', v_role);
+        EXECUTE format('GRANT DELETE ON TABLE public.idempotency_keys, public.outbox_events, public.processed_events TO %I', v_role);
         EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %I', v_role);
         EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public.ledger_transactions, public.ledger_items FROM %I', v_role);
-        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', v_role);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE DELETE ON TABLES FROM %I', v_role);
+        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE ON TABLES TO %I', v_role);
         EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO %I', v_role);
       END
       $$;
@@ -60,6 +78,11 @@ async function ensureLeastPrivilegeAppRole(
   }
 }
 
+/**
+ * Applies Drizzle SQL migrations and optionally provisions the least-privilege runtime role.
+ * IMPORTANT: Requires a direct or session-mode PostgreSQL connection (`MIGRATION_DATABASE_URI`)
+ * because `pg_advisory_lock` is session-scoped and is unsafe through PgBouncer transaction pooling.
+ */
 export async function runMigrations(
   connectionString = process.env.MIGRATION_DATABASE_URI ||
     process.env.DATABASE_URI,
@@ -86,9 +109,17 @@ export async function runMigrations(
         await ensureLeastPrivilegeAppRole(client, appUser, appPassword);
       }
     } finally {
-      await client
-        .query('SELECT pg_advisory_unlock($1)', [MIGRATION_ADVISORY_LOCK_ID])
+      const unlockRes = await client
+        .query<{ unlocked: boolean }>(
+          'SELECT pg_advisory_unlock($1) AS unlocked',
+          [MIGRATION_ADVISORY_LOCK_ID],
+        )
         .catch(() => undefined);
+      if (unlockRes && unlockRes.rows[0]?.unlocked !== true) {
+        console.warn(
+          `Advisory lock ${MIGRATION_ADVISORY_LOCK_ID} was not held on unlock connection; verify MIGRATION_DATABASE_URI uses direct or session-mode pooling`,
+        );
+      }
       client.release();
     }
   } finally {

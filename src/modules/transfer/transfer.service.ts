@@ -4,13 +4,11 @@ import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   formatMinorToApi,
   parseAmountToMinor,
-} from '../../common/utils/money.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.js';
+} from '../../common/utils/money.util.js';
+import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import { transfers } from '../../database/schema/index.js';
-import {
-  IdempotencyService,
-  type IdempotentExecutionResult,
-} from '../idempotency/idempotency.service.js';
+import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
+import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import type { TransferCreateDto } from './dto/transfer-create.dto.js';
@@ -19,7 +17,7 @@ import type { TransferResponseDto } from './dto/transfer-response.dto.js';
 @Injectable()
 export class TransferService {
   constructor(
-    private readonly _idempotency: IdempotencyService,
+    private readonly _idempotencyService: IdempotencyService,
     private readonly _walletService: WalletService,
     private readonly _ledgerService: LedgerService,
   ) {}
@@ -45,7 +43,7 @@ export class TransferService {
       restrictionUserIds: [dto.fromUserId],
     });
 
-    return this._idempotency.executeInTransaction<TransferResponseDto>({
+    return this._idempotencyService.executeInTransaction<TransferResponseDto>({
       scope: `POST:/transfers:${dto.fromUserId}`,
       key: params.idempotencyKey,
       requestBody: dto,

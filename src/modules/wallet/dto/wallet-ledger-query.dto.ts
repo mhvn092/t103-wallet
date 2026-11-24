@@ -1,30 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsIn, IsInt, Matches, Max, Min, ValidateIf } from 'class-validator';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.js';
+import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
+import { emptyToUndefined } from '../../../common/utils/string-normalizer.util.js';
+import {
+  WALLET_ACCOUNT_FILTERS,
+  parseStrictLimit,
+} from '../wallet-ledger-query.util.js';
 import type { UserAccountType } from '../wallet.types.js';
-
-const ACCOUNT_FILTERS = ['AVAILABLE', 'LOCKED', 'RECEIVABLE', 'ALL'] as const;
-
-function emptyToUndefined(value: unknown): unknown {
-  return typeof value === 'string' && value.trim() === '' ? undefined : value;
-}
-
-function parseStrictLimit(value: unknown): number {
-  if (value === undefined || value === '') {
-    return 20;
-  }
-  if (typeof value === 'number') {
-    return value;
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (/^[1-9]\d*$/.test(trimmed)) {
-      return Number(trimmed);
-    }
-  }
-  return Number.NaN;
-}
 
 export class WalletLedgerQueryDto {
   @ApiPropertyOptional({
@@ -51,11 +34,11 @@ export class WalletLedgerQueryDto {
   cursor?: string;
 
   @ApiPropertyOptional({
-    enum: ACCOUNT_FILTERS,
+    enum: WALLET_ACCOUNT_FILTERS,
     default: 'AVAILABLE',
   })
   @Transform(({ value }) => emptyToUndefined(value) ?? 'AVAILABLE')
-  @IsIn(ACCOUNT_FILTERS, {
+  @IsIn(WALLET_ACCOUNT_FILTERS, {
     message: 'accountType must be AVAILABLE, LOCKED, RECEIVABLE, or ALL',
   })
   accountType: UserAccountType | 'ALL' = 'AVAILABLE';

@@ -76,13 +76,14 @@ export const deposits = pgTable(
     ...auditTimestamps(),
   },
   (t) => [
+    // Migration 0004 attaches INCLUDE (id) for index-only poll claiming
     index('deposits_poll_idx')
       .on(t.nextPollAt)
       .where(sql`${t.status} <> 'SUCCEEDED' AND ${t.nextPollAt} IS NOT NULL`),
+    // Migration 0004 attaches INCLUDE (id, psp_ref_id, verified_amount) for reconciliation scans
     index('deposits_verified_at_idx')
       .on(t.verifiedAt)
       .where(sql`${t.status} = 'SUCCEEDED'`),
-    index('deposits_psp_ref_idx').on(t.pspRefId),
   ],
 );
 
@@ -119,12 +120,16 @@ export const withdrawals = pgTable(
     ...auditTimestamps(),
   },
   (t) => [
+    // Migration 0004 attaches INCLUDE (status, lease_until)
     index('withdrawals_dispatch_idx')
       .on(t.createdAt)
       .where(sql`${t.status} IN ('PENDING_DISPATCH', 'DISPATCHING')`),
     index('withdrawals_poll_idx')
       .on(t.nextPollAt)
       .where(sql`${t.status} IN ('PROCESSING', 'MANUAL_REVIEW')`),
+    index('withdrawals_manual_review_idx')
+      .on(t.id)
+      .where(sql`${t.status} = 'MANUAL_REVIEW'`),
   ],
 );
 
@@ -160,7 +165,9 @@ export const financialDiscrepancies = pgTable(
       .defaultNow(),
   },
   (t) => [
-    index('financial_discrepancies_user_status_idx').on(t.userId, t.status),
+    index('financial_discrepancies_open_idx')
+      .on(t.id)
+      .where(sql`${t.status} = 'OPEN'`),
     uniqueIndex('financial_discrepancies_ref_type_uq').on(
       t.referenceType,
       t.referenceId,
@@ -169,25 +176,16 @@ export const financialDiscrepancies = pgTable(
   ],
 );
 
-export const transfers = pgTable(
-  'transfers',
-  {
-    id: uuid('id').primaryKey(),
-    fromUserId: text('from_user_id').notNull(),
-    toUserId: text('to_user_id').notNull(),
-    currency: text('currency').notNull(),
-    amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => [
-    index('transfers_from_user_created_idx').on(
-      t.fromUserId,
-      t.createdAt.desc(),
-    ),
-  ],
-);
+export const transfers = pgTable('transfers', {
+  id: uuid('id').primaryKey(),
+  fromUserId: text('from_user_id').notNull(),
+  toUserId: text('to_user_id').notNull(),
+  currency: text('currency').notNull(),
+  amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
 
 export const outboxEvents = pgTable(
   'outbox_events',
@@ -208,9 +206,13 @@ export const outboxEvents = pgTable(
     publishedAt: timestamp('published_at', { withTimezone: true }),
   },
   (t) => [
+    // Migration 0004 attaches INCLUDE (lease_until, created_at)
     index('outbox_pending_idx')
       .on(t.nextRetryAt)
       .where(sql`${t.status} = 'PENDING'`),
+    index('outbox_published_retention_idx')
+      .on(t.publishedAt)
+      .where(sql`${t.status} = 'PUBLISHED'`),
   ],
 );
 
@@ -223,7 +225,10 @@ export const processedEvents = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.eventId, t.consumerName] })],
+  (t) => [
+    primaryKey({ columns: [t.eventId, t.consumerName] }),
+    index('processed_events_processed_at_idx').on(t.processedAt),
+  ],
 );
 
 export const systemControls = pgTable('system_controls', {

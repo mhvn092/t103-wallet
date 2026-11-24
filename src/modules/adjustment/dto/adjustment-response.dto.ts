@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.js';
+import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
 
 export class AdjustmentResponseDto {
   @ApiProperty({ format: 'uuid' })

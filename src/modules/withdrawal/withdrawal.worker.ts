@@ -9,10 +9,10 @@ export class WithdrawalWorker extends IntervalWorkerBase {
   protected readonly workerName = WithdrawalWorker.name;
 
   constructor(
-    config: ConfigService<EnvConfig, true>,
+    configService: ConfigService<EnvConfig, true>,
     private readonly _withdrawalService: WithdrawalService,
   ) {
-    super(config);
+    super(configService);
   }
 
   protected async runTick(): Promise<void> {

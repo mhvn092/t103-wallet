@@ -1,6 +1,5 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { z } from 'zod';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import type { EnvConfig } from '../../config/env.validation.js';
@@ -13,41 +12,29 @@ import type {
   PspPaymentStatusResult,
   PspVerifyResult,
 } from './provider.types.js';
-
-const createPaymentResponseSchema = z.object({
-  token: z.string().min(1),
-  paymentUrl: z.string().min(1),
-  expiresAt: z.string().nullish(),
-});
-
-const paymentStatusSchema = z.object({
-  status: z.enum(['INIT', 'PAID', 'VERIFIED', 'FAILED', 'EXPIRED']),
-  amount: z.union([z.string(), z.number()]).nullish(),
-  refId: z.string().nullish(),
-  orderId: z.string().nullish(),
-});
-
-const verifyResponseSchema = z.object({
-  code: z.number().nullish(),
-  status: z.string().nullish(),
-  amount: z.union([z.string(), z.number()]).nullish(),
-  refId: z.string().nullish(),
-  message: z.string().nullish(),
-});
+import {
+  pspCreatePaymentResponseSchema,
+  pspPaymentStatusSchema,
+  pspVerifyResponseSchema,
+} from './psp.schemas.js';
 
 @Injectable()
 export class PspClient {
-  constructor(private readonly _config: ConfigService<EnvConfig, true>) {}
+  constructor(
+    private readonly _configService: ConfigService<EnvConfig, true>,
+  ) {}
 
   async createPayment(params: {
     amountIrt: bigint;
     orderId: string;
     callbackUrl: string;
   }): Promise<{ token: string; paymentUrl: string; expiresAt: Date }> {
-    const ttlSeconds = this._config.get('DEPOSIT_TTL_SECONDS', { infer: true });
+    const ttlSeconds = this._configService.get('DEPOSIT_TTL_SECONDS', {
+      infer: true,
+    });
     const amountIrr = params.amountIrt * 10n;
     const outcome = await requestProviderJson({
-      config: this._config,
+      config: this._configService,
       baseUrlKey: 'PSP_BASE_URL',
       path: '/psp/payments',
       method: 'POST',
@@ -74,7 +61,7 @@ export class PspClient {
       );
     }
 
-    const parsed = createPaymentResponseSchema.safeParse(outcome.data);
+    const parsed = pspCreatePaymentResponseSchema.safeParse(outcome.data);
     if (!parsed.success) {
       throw new DomainException(
         HttpStatus.SERVICE_UNAVAILABLE,
@@ -100,7 +87,7 @@ export class PspClient {
 
   async getPaymentStatus(token: string): Promise<PspPaymentStatusResult> {
     const outcome = await requestProviderJson({
-      config: this._config,
+      config: this._configService,
       baseUrlKey: 'PSP_BASE_URL',
       path: `/psp/payments/${encodeURIComponent(token)}`,
       method: 'GET',
@@ -110,18 +97,14 @@ export class PspClient {
       return { kind: 'AMBIGUOUS', reason: outcome.reason };
     }
 
-    if (
-      outcome.status >= 500 ||
-      outcome.status < 200 ||
-      outcome.status >= 300
-    ) {
+    if (outcome.status < 200 || outcome.status >= 300) {
       return {
         kind: 'AMBIGUOUS',
         reason: `PSP status inquiry returned HTTP ${outcome.status}`,
       };
     }
 
-    const parsed = paymentStatusSchema.safeParse(outcome.data);
+    const parsed = pspPaymentStatusSchema.safeParse(outcome.data);
     if (!parsed.success) {
       return {
         kind: 'AMBIGUOUS',
@@ -150,7 +133,7 @@ export class PspClient {
 
   async verifyPayment(token: string): Promise<PspVerifyResult> {
     const outcome = await requestProviderJson({
-      config: this._config,
+      config: this._configService,
       baseUrlKey: 'PSP_BASE_URL',
       path: '/psp/verify',
       method: 'POST',
@@ -168,7 +151,7 @@ export class PspClient {
       };
     }
 
-    const parsed = verifyResponseSchema.safeParse(outcome.data);
+    const parsed = pspVerifyResponseSchema.safeParse(outcome.data);
     if (!parsed.success) {
       return {
         kind: 'RETRYABLE_ERROR',
@@ -215,8 +198,8 @@ export class PspClient {
   }
 
   async fetchSettlementCsv(date: string): Promise<string> {
-    const baseUrl = this._config.get('PSP_BASE_URL', { infer: true });
-    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+    const baseUrl = this._configService.get('PSP_BASE_URL', { infer: true });
+    const timeoutMs = this._configService.get('PROVIDER_HTTP_TIMEOUT_MS', {
       infer: true,
     });
 

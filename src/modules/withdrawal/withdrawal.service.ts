@@ -1,7 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
-import { z } from 'zod';
+import { PAUSED_WITHDRAWALS_CONTROL_KEY } from '../../common/constants/system-controls.constants.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -9,17 +9,16 @@ import {
   addPositiveJitterMs,
   computeJitteredBackoffMs,
   computeSafeLeaseMs,
-} from '../../common/utils/backoff.js';
-import { assertValidDestination } from '../../common/utils/destination-validator.js';
+} from '../../common/utils/backoff.util.js';
+import { assertValidDestination } from '../../common/utils/destination-validator.util.js';
 import {
   type Currency,
-  convertUsdtToIrtCeiling,
   formatMinorToApi,
   parseAmountToMinor,
-} from '../../common/utils/money.js';
-import { getTehranDateString } from '../../common/utils/tehran-date.js';
-import { assertValidUuid } from '../../common/utils/uuid-validation.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.js';
+} from '../../common/utils/money.util.js';
+import { getTehranDateString } from '../../common/utils/tehran-date.util.js';
+import { assertValidUuid } from '../../common/utils/uuid-validation.util.js';
+import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import type { DbTransaction } from '../../database/database.types.js';
@@ -30,15 +29,12 @@ import {
   userRestrictions,
   withdrawals,
 } from '../../database/schema/index.js';
-import {
-  IdempotencyService,
-  type IdempotentExecutionResult,
-} from '../idempotency/idempotency.service.js';
+import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
+import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import type { LedgerPostingLine } from '../ledger/ledger.types.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { verifyHmacSha256Hex } from '../providers/hmac.util.js';
 import { PayoutClient } from '../providers/payout.client.js';
-import { parseIrrToIrt } from '../providers/provider-http.util.js';
 import type { PayoutStatusValue } from '../providers/provider.types.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import type { WithdrawalCreateDto } from './dto/withdrawal-create.dto.js';
@@ -46,46 +42,31 @@ import type {
   WithdrawalResponseDto,
   WithdrawalWebhookAckDto,
 } from './dto/withdrawal-response.dto.js';
-
-const DISPATCH_LEASE_MS = 45_000;
-const PROCESSING_POLL_DELAY_MS = 3_000;
-const PROCESSING_POLL_LEASE_MS = 15_000;
-const PAUSED_WITHDRAWALS_CONTROL_KEY = 'withdrawals_paused_currencies';
-
-const payoutWebhookSchema = z.object({
-  requestId: z.string().min(1).nullish(),
-  status: z
-    .enum([
-      'PENDING',
-      'PROCESSING',
-      'SUCCEEDED',
-      'FAILED',
-      'RETURNED',
-      'REVERSED',
-    ])
-    .nullish(),
-  trackingId: z.string().nullish(),
-  refId: z.string().nullish(),
-  reason: z.string().nullish(),
-  failureReason: z.string().nullish(),
-  amount: z.union([z.string(), z.number()]).nullish(),
-  currency: z.string().nullish(),
-});
-
-type WithdrawalRow = typeof withdrawals.$inferSelect;
-
-interface ClaimedDispatchItem {
-  row: WithdrawalRow;
-  wasRecovery: boolean;
-  claimedVersion: bigint;
-}
+import {
+  WITHDRAWAL_DISPATCH_LEASE_MS,
+  WITHDRAWAL_PROCESSING_POLL_DELAY_MS,
+  WITHDRAWAL_PROCESSING_POLL_LEASE_MS,
+} from './withdrawal.constants.js';
+import {
+  computeWithdrawalPolicyAmounts,
+  isWebhookAmountValid,
+  toWithdrawalResponseDto,
+} from './withdrawal.mapper.js';
+import {
+  type PayoutWebhookPayload,
+  payoutWebhookPayloadSchema,
+} from './withdrawal.schemas.js';
+import type {
+  ClaimedWithdrawalDispatchItem,
+  WithdrawalEntity,
+} from './withdrawal.types.js';
 
 @Injectable()
 export class WithdrawalService {
   constructor(
-    private readonly _config: ConfigService<EnvConfig, true>,
-    private readonly _database: DatabaseService,
-    private readonly _idempotency: IdempotencyService,
+    private readonly _configService: ConfigService<EnvConfig, true>,
+    private readonly _databaseService: DatabaseService,
+    private readonly _idempotencyService: IdempotencyService,
     private readonly _walletService: WalletService,
     private readonly _ledgerService: LedgerService,
     private readonly _payoutClient: PayoutClient,
@@ -119,144 +100,150 @@ export class WithdrawalService {
       restrictionUserIds: [dto.userId],
     });
 
-    return this._idempotency.executeInTransaction<WithdrawalResponseDto>({
-      scope: `POST:/withdrawals:${dto.userId}`,
-      key: params.idempotencyKey,
-      requestBody: dto,
-      handler: async (tx) => {
-        const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
-        const normalizedDest = assertValidDestination(
-          dto.destination,
-          dto.currency,
-        );
-        this._assertAboveMinimum(amountMinor, dto.currency);
-        const policy = this._computePolicyAmounts(amountMinor, dto.currency);
-
-        await this._assertCurrencyNotPaused(tx, dto.currency);
-        const usedIrt = await this._walletService.lockDailyLimit(
-          tx,
-          dto.userId,
-          limitDate,
-        );
-        const frozen = await this._walletService.lockUserRestriction(
-          tx,
-          dto.userId,
-        );
-        if (frozen) {
-          throw new DomainException(
-            HttpStatus.FORBIDDEN,
-            ErrorCode.OUTBOUND_FROZEN,
-            'Outbound transfers and withdrawals are frozen for this account',
+    return this._idempotencyService.executeInTransaction<WithdrawalResponseDto>(
+      {
+        scope: `POST:/withdrawals:${dto.userId}`,
+        key: params.idempotencyKey,
+        requestBody: dto,
+        handler: async (tx) => {
+          const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
+          const normalizedDest = assertValidDestination(
+            dto.destination,
+            dto.currency,
           );
-        }
-
-        const lockedAccounts =
-          await this._walletService.lockUserAccountsCanonical(tx, [
-            availableSpec,
-            lockedSpec,
-          ]);
-        const userAvailable = this._walletService.getRequiredLockedAccount(
-          lockedAccounts,
-          availableSpec,
-        );
-        const userLocked = this._walletService.getRequiredLockedAccount(
-          lockedAccounts,
-          lockedSpec,
-        );
-
-        if (usedIrt + policy.irtEquivalent > policy.dailyLimitIrt) {
-          throw new DomainException(
-            HttpStatus.UNPROCESSABLE_ENTITY,
-            ErrorCode.DAILY_LIMIT_EXCEEDED,
-            'Withdrawal exceeds remaining daily limit',
+          this._assertAboveMinimum(amountMinor, dto.currency);
+          const policy = computeWithdrawalPolicyAmounts(
+            this._configService,
+            amountMinor,
+            dto.currency,
           );
-        }
 
-        const totalHold = amountMinor + policy.feeMinor;
-        const availableBalance = BigInt(userAvailable.balance ?? '0');
-        if (availableBalance < totalHold) {
-          throw new DomainException(
-            HttpStatus.UNPROCESSABLE_ENTITY,
-            ErrorCode.INSUFFICIENT_FUNDS,
-            'Insufficient available balance for withdrawal and fee',
-          );
-        }
-
-        await this._walletService.addDailyLimitUsage(
-          tx,
-          dto.userId,
-          limitDate,
-          policy.irtEquivalent,
-        );
-
-        const withdrawalId = generateUuidV7();
-        const [inserted] = await tx
-          .insert(withdrawals)
-          .values({
-            id: withdrawalId,
-            userId: dto.userId,
-            currency: dto.currency,
-            amount: amountMinor.toString(),
-            fee: policy.feeMinor.toString(),
-            fxRateIrt: policy.fxRateIrt.toString(),
-            irtEquivalent: policy.irtEquivalent.toString(),
+          await this._assertCurrencyNotPaused(tx, dto.currency);
+          const usedIrt = await this._walletService.lockDailyLimit(
+            tx,
+            dto.userId,
             limitDate,
-            quotaReleased: false,
-            destination: normalizedDest,
-            providerRequestId: `wd_${withdrawalId}`,
-            status: 'PENDING_DISPATCH',
-            lateSuccessConflict: false,
-            version: 1n,
-          })
-          .returning();
-
-        if (!inserted) {
-          throw new DomainException(
-            HttpStatus.INTERNAL_SERVER_ERROR,
-            ErrorCode.INTERNAL_ERROR,
-            'Failed to create withdrawal record',
           );
-        }
+          const frozen = await this._walletService.lockUserRestriction(
+            tx,
+            dto.userId,
+          );
+          if (frozen) {
+            throw new DomainException(
+              HttpStatus.FORBIDDEN,
+              ErrorCode.OUTBOUND_FROZEN,
+              'Outbound transfers and withdrawals are frozen for this account',
+            );
+          }
 
-        await this._ledgerService.postTransaction(tx, {
-          type: 'WD_HOLD',
-          referenceType: 'WITHDRAWAL',
-          referenceId: withdrawalId,
-          description: `Withdrawal hold for ${dto.currency} payout`,
-          metadata: {
-            currency: dto.currency,
-            destination: normalizedDest,
-            fee: formatMinorToApi(policy.feeMinor, dto.currency),
-          },
-          postings: [
-            {
-              account: userAvailable,
-              direction: 'DEBIT',
-              amount: totalHold,
-            },
-            {
-              account: userLocked,
-              direction: 'CREDIT',
-              amount: totalHold,
-            },
-          ],
-        });
+          const lockedAccounts =
+            await this._walletService.lockUserAccountsCanonical(tx, [
+              availableSpec,
+              lockedSpec,
+            ]);
+          const userAvailable = this._walletService.getRequiredLockedAccount(
+            lockedAccounts,
+            availableSpec,
+          );
+          const userLocked = this._walletService.getRequiredLockedAccount(
+            lockedAccounts,
+            lockedSpec,
+          );
 
-        return this._toDto(inserted);
+          if (usedIrt + policy.irtEquivalent > policy.dailyLimitIrt) {
+            throw new DomainException(
+              HttpStatus.UNPROCESSABLE_ENTITY,
+              ErrorCode.DAILY_LIMIT_EXCEEDED,
+              'Withdrawal exceeds remaining daily limit',
+            );
+          }
+
+          const totalHold = amountMinor + policy.feeMinor;
+          const availableBalance = BigInt(userAvailable.balance ?? '0');
+          if (availableBalance < totalHold) {
+            throw new DomainException(
+              HttpStatus.UNPROCESSABLE_ENTITY,
+              ErrorCode.INSUFFICIENT_FUNDS,
+              'Insufficient available balance for withdrawal and fee',
+            );
+          }
+
+          await this._walletService.addDailyLimitUsage(
+            tx,
+            dto.userId,
+            limitDate,
+            policy.irtEquivalent,
+          );
+
+          const withdrawalId = generateUuidV7();
+          const [inserted] = await tx
+            .insert(withdrawals)
+            .values({
+              id: withdrawalId,
+              userId: dto.userId,
+              currency: dto.currency,
+              amount: amountMinor.toString(),
+              fee: policy.feeMinor.toString(),
+              fxRateIrt: policy.fxRateIrt.toString(),
+              irtEquivalent: policy.irtEquivalent.toString(),
+              limitDate,
+              quotaReleased: false,
+              destination: normalizedDest,
+              providerRequestId: `wd_${withdrawalId}`,
+              status: 'PENDING_DISPATCH',
+              lateSuccessConflict: false,
+              version: 1n,
+            })
+            .returning();
+
+          if (!inserted) {
+            throw new DomainException(
+              HttpStatus.INTERNAL_SERVER_ERROR,
+              ErrorCode.INTERNAL_ERROR,
+              'Failed to create withdrawal record',
+            );
+          }
+
+          await this._ledgerService.postTransaction(tx, {
+            type: 'WD_HOLD',
+            referenceType: 'WITHDRAWAL',
+            referenceId: withdrawalId,
+            description: `Withdrawal hold for ${dto.currency} payout`,
+            metadata: {
+              currency: dto.currency,
+              destination: normalizedDest,
+              fee: formatMinorToApi(policy.feeMinor, dto.currency),
+            },
+            postings: [
+              {
+                account: userAvailable,
+                direction: 'DEBIT',
+                amount: totalHold,
+              },
+              {
+                account: userLocked,
+                direction: 'CREDIT',
+                amount: totalHold,
+              },
+            ],
+          });
+
+          return toWithdrawalResponseDto(inserted);
+        },
       },
-    });
+    );
   }
 
   async getWithdrawal(withdrawalId: string): Promise<WithdrawalResponseDto> {
     const validId = assertValidUuid(withdrawalId, 'withdrawalId');
     const row = await this._requireWithdrawal(validId);
-    return this._toDto(row);
+    return toWithdrawalResponseDto(row);
   }
 
   async cancelWithdrawal(withdrawalId: string): Promise<WithdrawalResponseDto> {
     const validId = assertValidUuid(withdrawalId, 'withdrawalId');
 
-    const updated = await this._database.runInTransaction(async (tx) => {
+    const updated = await this._databaseService.runInTransaction(async (tx) => {
       const [locked] = await tx
         .select()
         .from(withdrawals)
@@ -294,12 +281,14 @@ export class WithdrawalService {
       );
     });
 
-    return this._toDto(updated);
+    return toWithdrawalResponseDto(updated);
   }
 
   async dispatchPendingBatch(limit = 10): Promise<number> {
     const claimed = await this._claimDispatchBatch(limit);
-    const slaMs = this._config.get('WD_MANUAL_REVIEW_SLA_MS', { infer: true });
+    const slaMs = this._configService.get('WD_MANUAL_REVIEW_SLA_MS', {
+      infer: true,
+    });
 
     for (const item of claimed) {
       try {
@@ -320,7 +309,7 @@ export class WithdrawalService {
     rawBody: Buffer | undefined;
     signatureHeader: string | undefined;
   }): Promise<WithdrawalWebhookAckDto> {
-    const secret = this._config.get('WEBHOOK_SECRET', { infer: true });
+    const secret = this._configService.get('WEBHOOK_SECRET', { infer: true });
     if (
       !Buffer.isBuffer(params.rawBody) ||
       !verifyHmacSha256Hex(params.rawBody, params.signatureHeader, secret)
@@ -343,12 +332,12 @@ export class WithdrawalService {
       );
     }
 
-    const parsed = payoutWebhookSchema.safeParse(rawJson);
+    const parsed = payoutWebhookPayloadSchema.safeParse(rawJson);
     if (!parsed.success || !parsed.data.requestId || !parsed.data.status) {
       return { received: true };
     }
 
-    const [row] = await this._database.db
+    const [row] = await this._databaseService.db
       .select()
       .from(withdrawals)
       .where(eq(withdrawals.providerRequestId, parsed.data.requestId))
@@ -378,40 +367,44 @@ export class WithdrawalService {
 
   async pollProcessingBatch(limit = 10): Promise<number> {
     const now = new Date();
-    const slaMs = this._config.get('WD_MANUAL_REVIEW_SLA_MS', { infer: true });
-
-    const claimedRows = await this._database.runInTransaction(async (tx) => {
-      const due = await tx
-        .select()
-        .from(withdrawals)
-        .where(
-          and(
-            inArray(withdrawals.status, ['PROCESSING', 'MANUAL_REVIEW']),
-            lte(withdrawals.nextPollAt, now),
-          ),
-        )
-        .orderBy(asc(withdrawals.nextPollAt))
-        .limit(limit)
-        .for('update', { skipLocked: true });
-
-      if (due.length === 0) {
-        return [];
-      }
-
-      const ids = due.map((d) => d.id);
-      const pollLeaseMs = this._getProcessingPollLeaseMs();
-      await tx
-        .update(withdrawals)
-        .set({
-          nextPollAt: new Date(
-            now.getTime() + addPositiveJitterMs(pollLeaseMs),
-          ),
-          updatedAt: now,
-        })
-        .where(inArray(withdrawals.id, ids));
-
-      return due;
+    const slaMs = this._configService.get('WD_MANUAL_REVIEW_SLA_MS', {
+      infer: true,
     });
+
+    const claimedRows = await this._databaseService.runInTransaction(
+      async (tx) => {
+        const due = await tx
+          .select()
+          .from(withdrawals)
+          .where(
+            and(
+              inArray(withdrawals.status, ['PROCESSING', 'MANUAL_REVIEW']),
+              lte(withdrawals.nextPollAt, now),
+            ),
+          )
+          .orderBy(asc(withdrawals.nextPollAt))
+          .limit(limit)
+          .for('update', { skipLocked: true });
+
+        if (due.length === 0) {
+          return [];
+        }
+
+        const ids = due.map((d) => d.id);
+        const pollLeaseMs = this._getProcessingPollLeaseMs();
+        await tx
+          .update(withdrawals)
+          .set({
+            nextPollAt: new Date(
+              now.getTime() + addPositiveJitterMs(pollLeaseMs),
+            ),
+            updatedAt: now,
+          })
+          .where(inArray(withdrawals.id, ids));
+
+        return due;
+      },
+    );
 
     for (const row of claimedRows) {
       await this._pollSingleProcessingRow(row, slaMs);
@@ -423,8 +416,8 @@ export class WithdrawalService {
   private _assertAboveMinimum(amountMinor: bigint, currency: Currency): void {
     const minStr =
       currency === 'IRT'
-        ? this._config.get('MIN_WITHDRAWAL_IRT', { infer: true })
-        : this._config.get('MIN_WITHDRAWAL_USDT', { infer: true });
+        ? this._configService.get('MIN_WITHDRAWAL_IRT', { infer: true })
+        : this._configService.get('MIN_WITHDRAWAL_USDT', { infer: true });
     const minMinor = parseAmountToMinor(minStr, currency);
     if (amountMinor < minMinor) {
       throw new DomainException(
@@ -435,41 +428,10 @@ export class WithdrawalService {
     }
   }
 
-  private _computePolicyAmounts(amountMinor: bigint, currency: Currency) {
-    const dailyLimitIrt = parseAmountToMinor(
-      this._config.get('DAILY_LIMIT_IRT', { infer: true }),
-      'IRT',
-    );
-    if (currency === 'IRT') {
-      return {
-        feeMinor: 0n,
-        fxRateIrt: 1n,
-        irtEquivalent: amountMinor,
-        dailyLimitIrt,
-      };
-    }
-
-    const feeMinor = parseAmountToMinor(
-      this._config.get('USDT_WITHDRAWAL_FEE', { infer: true }),
-      'USDT',
-      { allowZero: true },
-    );
-    const fxRateIrt = parseAmountToMinor(
-      this._config.get('USDT_IRT_RATE', { infer: true }),
-      'IRT',
-    );
-    return {
-      feeMinor,
-      fxRateIrt,
-      irtEquivalent: convertUsdtToIrtCeiling(amountMinor, fxRateIrt),
-      dailyLimitIrt,
-    };
-  }
-
   private async _requireWithdrawal(
     withdrawalId: string,
-  ): Promise<WithdrawalRow> {
-    const [row] = await this._database.db
+  ): Promise<WithdrawalEntity> {
+    const [row] = await this._databaseService.db
       .select()
       .from(withdrawals)
       .where(eq(withdrawals.id, withdrawalId))
@@ -485,26 +447,36 @@ export class WithdrawalService {
   }
 
   private _getDispatchLeaseMs(): number {
-    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+    const timeoutMs = this._configService.get('PROVIDER_HTTP_TIMEOUT_MS', {
       infer: true,
     });
-    return computeSafeLeaseMs(DISPATCH_LEASE_MS, timeoutMs, 2, 15_000);
+    return computeSafeLeaseMs(
+      WITHDRAWAL_DISPATCH_LEASE_MS,
+      timeoutMs,
+      2,
+      15_000,
+    );
   }
 
   private _getProcessingPollLeaseMs(): number {
-    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+    const timeoutMs = this._configService.get('PROVIDER_HTTP_TIMEOUT_MS', {
       infer: true,
     });
-    return computeSafeLeaseMs(PROCESSING_POLL_LEASE_MS, timeoutMs, 1, 10_000);
+    return computeSafeLeaseMs(
+      WITHDRAWAL_PROCESSING_POLL_LEASE_MS,
+      timeoutMs,
+      1,
+      10_000,
+    );
   }
 
   private async _claimDispatchBatch(
     limit: number,
-  ): Promise<ClaimedDispatchItem[]> {
+  ): Promise<ClaimedWithdrawalDispatchItem[]> {
     const now = new Date();
     const leaseUntil = new Date(now.getTime() + this._getDispatchLeaseMs());
 
-    return this._database.runInTransaction(async (tx) => {
+    return this._databaseService.runInTransaction(async (tx) => {
       const candidates = await tx
         .select()
         .from(withdrawals)
@@ -521,7 +493,7 @@ export class WithdrawalService {
         .limit(limit)
         .for('update', { skipLocked: true });
 
-      const claimed: ClaimedDispatchItem[] = [];
+      const claimed: ClaimedWithdrawalDispatchItem[] = [];
       for (const candidate of candidates) {
         const [updated] = await tx
           .update(withdrawals)
@@ -553,7 +525,7 @@ export class WithdrawalService {
   }
 
   private async _dispatchSingleItem(
-    item: ClaimedDispatchItem,
+    item: ClaimedWithdrawalDispatchItem,
     slaMs: number,
   ): Promise<void> {
     const { row, wasRecovery, claimedVersion } = item;
@@ -579,7 +551,7 @@ export class WithdrawalService {
   }
 
   private async _submitCreateTransfer(
-    row: WithdrawalRow,
+    row: WithdrawalEntity,
     claimedVersion: bigint,
     slaMs: number,
   ): Promise<void> {
@@ -593,14 +565,14 @@ export class WithdrawalService {
 
     if (result.kind === 'ACCEPTED') {
       const now = new Date();
-      await this._database.db
+      await this._databaseService.db
         .update(withdrawals)
         .set({
           status: 'PROCESSING',
           providerRefId: result.trackingId,
           leaseUntil: null,
           nextPollAt: new Date(
-            now.getTime() + addJitterMs(PROCESSING_POLL_DELAY_MS),
+            now.getTime() + addJitterMs(WITHDRAWAL_PROCESSING_POLL_DELAY_MS),
           ),
           version: sql`${withdrawals.version} + 1`,
           updatedAt: now,
@@ -628,7 +600,7 @@ export class WithdrawalService {
   }
 
   private async _handleAmbiguousDispatch(
-    row: WithdrawalRow,
+    row: WithdrawalEntity,
     claimedVersion: bigint,
     slaMs: number,
   ): Promise<void> {
@@ -639,7 +611,7 @@ export class WithdrawalService {
 
     const attempt = Math.max(1, Number(claimedVersion - 1n));
     const delayMs = computeJitteredBackoffMs(attempt, 1_500, 15_000);
-    await this._database.db
+    await this._databaseService.db
       .update(withdrawals)
       .set({
         leaseUntil: new Date(Date.now() + delayMs),
@@ -659,13 +631,13 @@ export class WithdrawalService {
     claimedVersion: bigint,
   ): Promise<void> {
     const now = new Date();
-    await this._database.db
+    await this._databaseService.db
       .update(withdrawals)
       .set({
         status: 'MANUAL_REVIEW',
         leaseUntil: null,
         nextPollAt: new Date(
-          now.getTime() + addJitterMs(PROCESSING_POLL_DELAY_MS),
+          now.getTime() + addJitterMs(WITHDRAWAL_PROCESSING_POLL_DELAY_MS),
         ),
         version: sql`${withdrawals.version} + 1`,
         updatedAt: now,
@@ -684,7 +656,7 @@ export class WithdrawalService {
     claimedVersion: bigint,
     reason: string,
   ): Promise<void> {
-    await this._database.runInTransaction(async (tx) => {
+    await this._databaseService.runInTransaction(async (tx) => {
       const [locked] = await tx
         .select()
         .from(withdrawals)
@@ -705,7 +677,7 @@ export class WithdrawalService {
   }
 
   private async _pollSingleProcessingRow(
-    row: WithdrawalRow,
+    row: WithdrawalEntity,
     slaMs: number,
   ): Promise<void> {
     try {
@@ -757,12 +729,12 @@ export class WithdrawalService {
   }
 
   private async _redispatchUnacceptedManualReview(
-    row: WithdrawalRow,
+    row: WithdrawalEntity,
     slaMs: number,
   ): Promise<void> {
     const now = new Date();
     const leaseUntil = new Date(now.getTime() + this._getDispatchLeaseMs());
-    const [claimed] = await this._database.db
+    const [claimed] = await this._databaseService.db
       .update(withdrawals)
       .set({
         status: 'DISPATCHING',
@@ -789,7 +761,7 @@ export class WithdrawalService {
   }
 
   private async _escalateToManualReview(withdrawalId: string): Promise<void> {
-    await this._database.db
+    await this._databaseService.db
       .update(withdrawals)
       .set({
         status: 'MANUAL_REVIEW',
@@ -838,7 +810,7 @@ export class WithdrawalService {
       });
     }
 
-    const updated = await this._database.runInTransaction(async (tx) => {
+    const updated = await this._databaseService.runInTransaction(async (tx) => {
       const [locked] = await tx
         .select()
         .from(withdrawals)
@@ -862,15 +834,15 @@ export class WithdrawalService {
       );
     });
 
-    return this._toDto(updated);
+    return toWithdrawalResponseDto(updated);
   }
 
   private async _routeLockedStatusTransition(
     tx: DbTransaction,
-    locked: WithdrawalRow,
+    locked: WithdrawalEntity,
     providerStatus: PayoutStatusValue,
     meta: { providerRefId: string | null; reason: string | null },
-  ): Promise<WithdrawalRow> {
+  ): Promise<WithdrawalEntity> {
     if (providerStatus === 'PENDING' || providerStatus === 'PROCESSING') {
       return this._advanceToProcessingIfDispatching(
         tx,
@@ -941,9 +913,9 @@ export class WithdrawalService {
 
   private async _advanceToProcessingIfDispatching(
     tx: DbTransaction,
-    locked: WithdrawalRow,
+    locked: WithdrawalEntity,
     providerRefId: string | null,
-  ): Promise<WithdrawalRow> {
+  ): Promise<WithdrawalEntity> {
     if (locked.status !== 'DISPATCHING') {
       return locked;
     }
@@ -955,7 +927,7 @@ export class WithdrawalService {
         providerRefId: providerRefId ?? locked.providerRefId,
         leaseUntil: null,
         nextPollAt: new Date(
-          now.getTime() + addJitterMs(PROCESSING_POLL_DELAY_MS),
+          now.getTime() + addJitterMs(WITHDRAWAL_PROCESSING_POLL_DELAY_MS),
         ),
         version: sql`${withdrawals.version} + 1`,
         updatedAt: now,
@@ -968,9 +940,9 @@ export class WithdrawalService {
 
   private async _settleLockedWithdrawal(
     tx: DbTransaction,
-    locked: WithdrawalRow,
+    locked: WithdrawalEntity,
     providerRefId: string | null,
-  ): Promise<WithdrawalRow> {
+  ): Promise<WithdrawalEntity> {
     const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
     const lockedSpec = {
       userId: locked.userId,
@@ -1050,9 +1022,9 @@ export class WithdrawalService {
 
   private async _transitionLockedToFailedAndRelease(
     tx: DbTransaction,
-    locked: WithdrawalRow,
+    locked: WithdrawalEntity,
     reason: string,
-  ): Promise<WithdrawalRow> {
+  ): Promise<WithdrawalEntity> {
     const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
     const availableSpec = {
       userId: locked.userId,
@@ -1125,9 +1097,9 @@ export class WithdrawalService {
 
   private async _reverseSucceededWithdrawal(
     tx: DbTransaction,
-    locked: WithdrawalRow,
+    locked: WithdrawalEntity,
     reason: string,
-  ): Promise<WithdrawalRow> {
+  ): Promise<WithdrawalEntity> {
     const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
     const otherCcy: Currency = ccy === 'IRT' ? 'USDT' : 'IRT';
     const availableSpec = {
@@ -1308,38 +1280,9 @@ export class WithdrawalService {
     }
   }
 
-  private _isWebhookAmountValid(
-    expectedCurrency: Currency,
-    expectedMinor: bigint,
-    providedAmount: string | number,
-    providedCurrency?: string | null,
-  ): boolean {
-    const normCcy = providedCurrency?.trim().toUpperCase();
-    try {
-      if (expectedCurrency === 'IRT') {
-        if (normCcy === 'IRT') {
-          return (
-            parseAmountToMinor(String(providedAmount), 'IRT') === expectedMinor
-          );
-        }
-        const parsedIrr = parseIrrToIrt(providedAmount);
-        return (
-          parsedIrr !== null &&
-          !parsedIrr.hasRemainder &&
-          parsedIrr.amountIrt === expectedMinor
-        );
-      }
-      return (
-        parseAmountToMinor(String(providedAmount), 'USDT') === expectedMinor
-      );
-    } catch {
-      return false;
-    }
-  }
-
   private async _checkWebhookPayloadMismatch(
-    row: WithdrawalRow,
-    payload: z.infer<typeof payoutWebhookSchema>,
+    row: WithdrawalEntity,
+    payload: PayoutWebhookPayload,
   ): Promise<void> {
     if (
       (payload.amount === undefined || payload.amount === null) &&
@@ -1361,7 +1304,7 @@ export class WithdrawalService {
     const amountMismatch =
       payload.amount !== undefined &&
       payload.amount !== null &&
-      !this._isWebhookAmountValid(
+      !isWebhookAmountValid(
         expectedCurrency,
         expectedMinor,
         payload.amount,
@@ -1375,7 +1318,7 @@ export class WithdrawalService {
     this._logger.warn(
       `Payout webhook payload mismatch for withdrawal=${row.id} req=${row.providerRequestId}`,
     );
-    await this._database.db
+    await this._databaseService.db
       .insert(financialDiscrepancies)
       .values({
         id: generateUuidV7(),
@@ -1406,9 +1349,9 @@ export class WithdrawalService {
 
   private async _handleLateSuccessConflict(
     tx: DbTransaction,
-    locked: WithdrawalRow,
+    locked: WithdrawalEntity,
     meta: { providerRefId: string | null; reason: string | null },
-  ): Promise<WithdrawalRow> {
+  ): Promise<WithdrawalEntity> {
     if (locked.lateSuccessConflict) {
       return locked;
     }
@@ -1551,25 +1494,6 @@ export class WithdrawalService {
       });
 
     return updated ?? locked;
-  }
-
-  private _toDto(row: WithdrawalRow): WithdrawalResponseDto {
-    const ccy: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
-    return {
-      withdrawalId: row.id,
-      userId: row.userId,
-      currency: ccy,
-      amount: formatMinorToApi(BigInt(row.amount), ccy),
-      fee: formatMinorToApi(BigInt(row.fee), ccy),
-      status: row.status,
-      destination: row.destination,
-      providerRequestId: row.providerRequestId,
-      providerRefId: row.providerRefId,
-      failureReason: row.failureReason,
-      lateSuccessConflict: row.lateSuccessConflict,
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
-    };
   }
 
   private readonly _logger = new Logger(WithdrawalService.name);

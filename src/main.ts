@@ -36,6 +36,7 @@ async function bootstrap(): Promise<void> {
       logLevels: isProd
         ? ['log', 'warn', 'error', 'fatal']
         : ['log', 'warn', 'error', 'fatal', 'debug'],
+      redact: ['password', 'authorization', 'x-internal-api-key'],
     }),
   );
   app.enableShutdownHooks();

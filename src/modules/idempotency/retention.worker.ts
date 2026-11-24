@@ -12,11 +12,13 @@ interface RetentionPurgeSummary {
 
 @Injectable()
 export class RetentionWorker extends IntervalWorkerBase {
+  protected readonly workerName = RetentionWorker.name;
+
   constructor(
-    private readonly _config: ConfigService<EnvConfig, true>,
-    private readonly _database: DatabaseService,
+    private readonly _configService: ConfigService<EnvConfig, true>,
+    private readonly _databaseService: DatabaseService,
   ) {
-    super(_config);
+    super(_configService);
   }
 
   async purgeExpiredOperationalRecords(
@@ -61,12 +63,13 @@ export class RetentionWorker extends IntervalWorkerBase {
     };
   }
 
-  protected readonly workerName = RetentionWorker.name;
-
   protected async runTick(): Promise<void> {
-    const intervalMs = this._config.get('RETENTION_CLEANUP_INTERVAL_MS', {
-      infer: true,
-    });
+    const intervalMs = this._configService.get(
+      'RETENTION_CLEANUP_INTERVAL_MS',
+      {
+        infer: true,
+      },
+    );
     const nowMs = Date.now();
     if (nowMs - this._lastRunAtMs < intervalMs) {
       return;
@@ -86,7 +89,7 @@ export class RetentionWorker extends IntervalWorkerBase {
   }
 
   private async _deleteBatch(sqlText: string, limit: number): Promise<number> {
-    const result = await this._database.pool.query(sqlText, [limit]);
+    const result = await this._databaseService.pool.query(sqlText, [limit]);
     return result.rowCount ?? 0;
   }
 

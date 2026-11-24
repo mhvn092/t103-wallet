@@ -9,26 +9,24 @@ import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
+import { normalizeIpAddress } from '../../common/utils/ip-address.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
-
-function normalizeIp(rawIp: string | undefined): string {
-  if (!rawIp) {
-    return '';
-  }
-  return rawIp.startsWith('::ffff:') ? rawIp.slice(7) : rawIp;
-}
 
 @Injectable()
 export class InternalOpsGuard implements CanActivate {
-  constructor(private readonly _config: ConfigService<EnvConfig, true>) {}
+  constructor(
+    private readonly _configService: ConfigService<EnvConfig, true>,
+  ) {}
 
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<Request>();
-    const allowedIpsRaw = this._config.get('INTERNAL_ALLOWED_IPS', {
+    const allowedIpsRaw = this._configService.get('INTERNAL_ALLOWED_IPS', {
       infer: true,
     });
-    const expectedKey = this._config.get('INTERNAL_API_KEY', { infer: true });
-    const appEnv = this._config.get('APP_ENV', { infer: true });
+    const expectedKey = this._configService.get('INTERNAL_API_KEY', {
+      infer: true,
+    });
+    const appEnv = this._configService.get('APP_ENV', { infer: true });
 
     if (appEnv === 'production' && !expectedKey) {
       throw new DomainException(
@@ -56,10 +54,10 @@ export class InternalOpsGuard implements CanActivate {
     const allowedIps = new Set(
       allowedIpsRaw
         .split(',')
-        .map((ip) => normalizeIp(ip.trim()))
+        .map((ip) => normalizeIpAddress(ip.trim()))
         .filter(Boolean),
     );
-    const clientIp = normalizeIp(remoteIp);
+    const clientIp = normalizeIpAddress(remoteIp);
     if (!allowedIps.has(clientIp)) {
       throw new DomainException(
         HttpStatus.FORBIDDEN,

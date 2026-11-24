@@ -6,17 +6,17 @@ import { InternalOpsService } from './internal-ops.service.js';
 
 @Injectable()
 export class DriftAuditWorker extends IntervalWorkerBase {
-  constructor(
-    private readonly _config: ConfigService<EnvConfig, true>,
-    private readonly _internalOpsService: InternalOpsService,
-  ) {
-    super(_config);
-  }
-
   protected readonly workerName = DriftAuditWorker.name;
 
+  constructor(
+    private readonly _configService: ConfigService<EnvConfig, true>,
+    private readonly _internalOpsService: InternalOpsService,
+  ) {
+    super(_configService);
+  }
+
   protected async runTick(): Promise<void> {
-    const intervalMs = this._config.get('DRIFT_AUDIT_INTERVAL_MS', {
+    const intervalMs = this._configService.get('DRIFT_AUDIT_INTERVAL_MS', {
       infer: true,
     });
     const nowMs = Date.now();

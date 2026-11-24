@@ -4,7 +4,7 @@ import {
   assertValidDestination,
   isValidIranianIban,
   isValidTrc20Address,
-} from './destination-validator.js';
+} from './destination-validator.util.js';
 
 function buildValidIranianIban(bban22: string): string {
   // 'IR00' moved to end => '182700' where I=18, R=27

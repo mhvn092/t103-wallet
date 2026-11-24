@@ -8,7 +8,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator.js';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.js';
+import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
 
 export class WithdrawalsPauseDto {
   @ApiProperty({
@@ -29,12 +29,4 @@ export class WithdrawalsPauseDto {
   @IsString()
   @MaxLength(500)
   reason?: string;
-}
-
-export class WithdrawalsPauseResponseDto {
-  @ApiProperty({ enum: CURRENCIES, isArray: true, example: ['USDT'] })
-  currencies!: Currency[];
-
-  @ApiProperty({ format: 'date-time' })
-  updatedAt!: string;
 }

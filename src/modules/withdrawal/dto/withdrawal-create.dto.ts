@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator.js';
 import { UserScopedDto } from '../../../common/dto/user-scoped.dto.js';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.js';
+import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
 
 export class WithdrawalCreateDto extends UserScopedDto {
   @ApiProperty({ enum: CURRENCIES, example: 'IRT' })

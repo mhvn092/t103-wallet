@@ -1,19 +1,7 @@
-export interface CsvDepositRecord {
-  rowNumber: string;
-  persianDate: string;
-  rawReference: string;
-  normalizedReference: string;
-  amountIrr: bigint;
-  amountIrt: bigint;
-  hasIrrRemainder: boolean;
-  description: string;
-}
-
-interface ParsedSettlementCsv {
-  deposits: CsvDepositRecord[];
-  ignoredRowCount: number;
-  duplicateCount: number;
-}
+import type {
+  CsvDepositRecord,
+  ParsedSettlementCsv,
+} from './settlement-csv.types.js';
 
 function toAsciiDigits(raw: string): string {
   let out = '';

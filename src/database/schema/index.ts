@@ -1,3 +1,3 @@
-export * from './accounts.js';
-export * from './ledger.js';
-export * from './operations.js';
+export * from './accounts.schema.js';
+export * from './ledger.schema.js';
+export * from './operations.schema.js';

@@ -1,17 +1,16 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, asc, eq, inArray, lte, ne, sql } from 'drizzle-orm';
-import { z } from 'zod';
+import { and, asc, eq, inArray, isNotNull, lte, ne, sql } from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   addJitterMs,
   addPositiveJitterMs,
   computeSafeLeaseMs,
-} from '../../common/utils/backoff.js';
-import { parseAmountToMinor } from '../../common/utils/money.js';
-import { assertValidUuid } from '../../common/utils/uuid-validation.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.js';
+} from '../../common/utils/backoff.util.js';
+import { parseAmountToMinor } from '../../common/utils/money.util.js';
+import { assertValidUuid } from '../../common/utils/uuid-validation.util.js';
+import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import {
@@ -22,6 +21,18 @@ import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { PspClient } from '../providers/psp.client.js';
 import { WalletService } from '../wallet/wallet.service.js';
+import {
+  DEPOSIT_INIT_LEASE_MS,
+  DEPOSIT_POLL_BACKOFF_MS,
+  DEPOSIT_POLL_CLAIM_LEASE_MS,
+  ORPHAN_INITIATED_AGE_MS,
+} from './deposit.constants.js';
+import {
+  computePostExpiryGracePollAt,
+  toDepositDetailResponseDto,
+} from './deposit.mapper.js';
+import { pspCallbackPayloadSchema } from './deposit.schemas.js';
+import type { DepositEntity } from './deposit.types.js';
 import type { DepositCreateDto } from './dto/deposit-create.dto.js';
 import type {
   DepositCallbackAckDto,
@@ -29,24 +40,12 @@ import type {
   DepositDetailResponseDto,
 } from './dto/deposit-response.dto.js';
 
-const DEPOSIT_INIT_LEASE_MS = 60_000;
-const ORPHAN_INITIATED_AGE_MS = 65_000;
-const POLL_BACKOFF_MS = 5_000;
-const POLL_CLAIM_LEASE_MS = 15_000;
-
-const pspCallbackPayloadSchema = z.object({
-  token: z.string().min(1).nullish(),
-  orderId: z.string().min(1).nullish(),
-});
-
-type DepositRow = typeof deposits.$inferSelect;
-
 @Injectable()
 export class DepositService {
   constructor(
-    private readonly _config: ConfigService<EnvConfig, true>,
-    private readonly _database: DatabaseService,
-    private readonly _idempotency: IdempotencyService,
+    private readonly _configService: ConfigService<EnvConfig, true>,
+    private readonly _databaseService: DatabaseService,
+    private readonly _idempotencyService: IdempotencyService,
     private readonly _walletService: WalletService,
     private readonly _ledgerService: LedgerService,
     private readonly _pspClient: PspClient,
@@ -61,14 +60,13 @@ export class DepositService {
     body: DepositCreateResponseDto;
   }> {
     const scope = `POST:/deposits:${params.dto.userId}`;
-    const claim = await this._idempotency.claimLeased<DepositCreateResponseDto>(
-      {
+    const claim =
+      await this._idempotencyService.claimLeased<DepositCreateResponseDto>({
         scope,
         key: params.idempotencyKey,
         requestBody: params.dto,
         leaseMs: this._getDepositInitLeaseMs(),
-      },
-    );
+      });
     if (claim.kind === 'REPLAY') {
       return {
         replayed: true,
@@ -129,7 +127,7 @@ export class DepositService {
       };
     } finally {
       if (!settledIdempotency) {
-        await this._idempotency
+        await this._idempotencyService
           .releaseLeased(scope, params.idempotencyKey, claim.leaseVersion)
           .catch(() => undefined);
       }
@@ -139,7 +137,7 @@ export class DepositService {
   async getDeposit(depositId: string): Promise<DepositDetailResponseDto> {
     const validId = assertValidUuid(depositId, 'depositId');
     const row = await this._requireDeposit(validId);
-    return this._toDetailDto(row);
+    return toDepositDetailResponseDto(row);
   }
 
   async handlePspCallback(rawPayload: unknown): Promise<DepositCallbackAckDto> {
@@ -189,7 +187,7 @@ export class DepositService {
     const row = await this._requireDeposit(validId);
 
     if (row.status === 'SUCCEEDED') {
-      return this._toDetailDto(row);
+      return toDepositDetailResponseDto(row);
     }
 
     if (!row.pspToken) {
@@ -233,35 +231,41 @@ export class DepositService {
 
   async pollPendingDeposits(limit = 20): Promise<number> {
     const now = new Date();
-    const claimedIds = await this._database.runInTransaction(async (tx) => {
-      const dueRows = await tx
-        .select({ id: deposits.id })
-        .from(deposits)
-        .where(
-          and(ne(deposits.status, 'SUCCEEDED'), lte(deposits.nextPollAt, now)),
-        )
-        .orderBy(asc(deposits.nextPollAt))
-        .limit(limit)
-        .for('update', { skipLocked: true });
+    const claimedIds = await this._databaseService.runInTransaction(
+      async (tx) => {
+        const dueRows = await tx
+          .select({ id: deposits.id })
+          .from(deposits)
+          .where(
+            and(
+              ne(deposits.status, 'SUCCEEDED'),
+              isNotNull(deposits.nextPollAt),
+              lte(deposits.nextPollAt, now),
+            ),
+          )
+          .orderBy(asc(deposits.nextPollAt))
+          .limit(limit)
+          .for('update', { skipLocked: true });
 
-      if (dueRows.length === 0) {
-        return [];
-      }
+        if (dueRows.length === 0) {
+          return [];
+        }
 
-      const ids = dueRows.map((r) => r.id);
-      const pollLeaseMs = this._getPollClaimLeaseMs();
-      await tx
-        .update(deposits)
-        .set({
-          nextPollAt: new Date(
-            now.getTime() + addPositiveJitterMs(pollLeaseMs),
-          ),
-          updatedAt: now,
-        })
-        .where(inArray(deposits.id, ids));
+        const ids = dueRows.map((r) => r.id);
+        const pollLeaseMs = this._getPollClaimLeaseMs();
+        await tx
+          .update(deposits)
+          .set({
+            nextPollAt: new Date(
+              now.getTime() + addPositiveJitterMs(pollLeaseMs),
+            ),
+            updatedAt: now,
+          })
+          .where(inArray(deposits.id, ids));
 
-      return ids;
-    });
+        return ids;
+      },
+    );
 
     for (const id of claimedIds) {
       try {
@@ -279,7 +283,7 @@ export class DepositService {
   }
 
   private _getDepositInitLeaseMs(): number {
-    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+    const timeoutMs = this._configService.get('PROVIDER_HTTP_TIMEOUT_MS', {
       infer: true,
     });
     return computeSafeLeaseMs(DEPOSIT_INIT_LEASE_MS, timeoutMs, 1, 10_000);
@@ -293,10 +297,15 @@ export class DepositService {
   }
 
   private _getPollClaimLeaseMs(): number {
-    const timeoutMs = this._config.get('PROVIDER_HTTP_TIMEOUT_MS', {
+    const timeoutMs = this._configService.get('PROVIDER_HTTP_TIMEOUT_MS', {
       infer: true,
     });
-    return computeSafeLeaseMs(POLL_CLAIM_LEASE_MS, timeoutMs, 2, 10_000);
+    return computeSafeLeaseMs(
+      DEPOSIT_POLL_CLAIM_LEASE_MS,
+      timeoutMs,
+      2,
+      10_000,
+    );
   }
 
   private async _createInitiatedDeposit(
@@ -304,9 +313,9 @@ export class DepositService {
     userId: string,
     amountMinor: bigint,
     orderId: string,
-  ): Promise<DepositRow> {
+  ): Promise<DepositEntity> {
     const now = new Date();
-    const [created] = await this._database.db
+    const [created] = await this._databaseService.db
       .insert(deposits)
       .values({
         id: depositId,
@@ -329,7 +338,7 @@ export class DepositService {
   }
 
   private async _createPspPaymentOrRelease(params: {
-    deposit: DepositRow;
+    deposit: DepositEntity;
     amountMinor: bigint;
     orderId: string;
     scope: string;
@@ -342,7 +351,9 @@ export class DepositService {
       }
     | { ok: false; error: unknown }
   > {
-    const appPublicUrl = this._config.get('APP_PUBLIC_URL', { infer: true });
+    const appPublicUrl = this._configService.get('APP_PUBLIC_URL', {
+      infer: true,
+    });
     const callbackUrl = `${appPublicUrl}/webhooks/psp/callback`;
 
     try {
@@ -356,7 +367,7 @@ export class DepositService {
       await this._markDepositFailedIfUnsettled(params.deposit, null).catch(
         () => undefined,
       );
-      await this._idempotency
+      await this._idempotencyService
         .releaseLeased(params.scope, params.idempotencyKey, params.leaseVersion)
         .catch(() => undefined);
       return { ok: false, error };
@@ -380,7 +391,7 @@ export class DepositService {
       createdAt: params.createdAt.toISOString(),
     };
 
-    await this._database.runInTransaction(async (tx) => {
+    await this._databaseService.runInTransaction(async (tx) => {
       await tx
         .update(deposits)
         .set({
@@ -388,7 +399,9 @@ export class DepositService {
           pspToken: params.pspPayment.token,
           paymentUrl: params.pspPayment.paymentUrl,
           expiresAt: params.pspPayment.expiresAt,
-          nextPollAt: new Date(now.getTime() + addJitterMs(POLL_BACKOFF_MS)),
+          nextPollAt: new Date(
+            now.getTime() + addJitterMs(DEPOSIT_POLL_BACKOFF_MS),
+          ),
           version: sql`${deposits.version} + 1`,
           updatedAt: now,
         })
@@ -399,7 +412,7 @@ export class DepositService {
           ),
         );
 
-      await this._idempotency.completeLeased({
+      await this._idempotencyService.completeLeased({
         scope: params.scope,
         key: params.idempotencyKey,
         leaseVersion: params.leaseVersion,
@@ -414,8 +427,8 @@ export class DepositService {
 
   private async _findDepositById(
     depositId: string,
-  ): Promise<DepositRow | undefined> {
-    const [row] = await this._database.db
+  ): Promise<DepositEntity | undefined> {
+    const [row] = await this._databaseService.db
       .select()
       .from(deposits)
       .where(eq(deposits.id, depositId))
@@ -426,9 +439,9 @@ export class DepositService {
   private async _findDepositByCallback(payload: {
     token?: string;
     orderId?: string;
-  }): Promise<DepositRow | undefined> {
+  }): Promise<DepositEntity | undefined> {
     if (payload.token) {
-      const [byToken] = await this._database.db
+      const [byToken] = await this._databaseService.db
         .select()
         .from(deposits)
         .where(eq(deposits.pspToken, payload.token))
@@ -438,7 +451,7 @@ export class DepositService {
       }
     }
     if (payload.orderId) {
-      const [byOrder] = await this._database.db
+      const [byOrder] = await this._databaseService.db
         .select()
         .from(deposits)
         .where(eq(deposits.orderId, payload.orderId))
@@ -449,7 +462,7 @@ export class DepositService {
   }
 
   private async _handleMissingToken(
-    row: DepositRow,
+    row: DepositEntity,
   ): Promise<DepositDetailResponseDto> {
     const ageMs = Date.now() - row.createdAt.getTime();
     if (
@@ -458,17 +471,21 @@ export class DepositService {
     ) {
       return this._markDepositFailedIfUnsettled(row, null);
     }
-    return this._toDetailDto(row);
+    return toDepositDetailResponseDto(row);
   }
 
   private async _handleInitStatus(
-    row: DepositRow,
+    row: DepositEntity,
   ): Promise<DepositDetailResponseDto> {
     const nowMs = Date.now();
     if (row.expiresAt && nowMs >= row.expiresAt.getTime()) {
-      const gracePollAt = this._computePostExpiryGracePollAt(
+      const graceMs = this._configService.get('DEPOSIT_EXPIRY_GRACE_MS', {
+        infer: true,
+      });
+      const gracePollAt = computePostExpiryGracePollAt(
         row.expiresAt,
         nowMs,
+        graceMs,
       );
       return this._markDepositFailedIfUnsettled(row, gracePollAt);
     }
@@ -477,38 +494,14 @@ export class DepositService {
     return this._reschedulePoll(row, targetStatus);
   }
 
-  private _computePostExpiryGracePollAt(
-    expiresAt: Date,
-    nowMs: number,
-  ): Date | null {
-    const graceMs = this._config.get('DEPOSIT_EXPIRY_GRACE_MS', {
-      infer: true,
-    });
-    if (graceMs <= 0) {
-      return null;
-    }
-    const graceDeadlineMs = expiresAt.getTime() + graceMs;
-    if (nowMs >= graceDeadlineMs) {
-      return null;
-    }
-    const elapsedMs = nowMs - expiresAt.getTime();
-    let stepBaseMs = 300_000;
-    if (elapsedMs < 120_000) {
-      stepBaseMs = 30_000;
-    } else if (elapsedMs < 300_000) {
-      stepBaseMs = 120_000;
-    }
-    return new Date(Math.min(graceDeadlineMs, nowMs + addJitterMs(stepBaseMs)));
-  }
-
   private async _recordOrderIdMismatchAndHaltPolling(
-    row: DepositRow,
+    row: DepositEntity,
     actualOrderId: string,
   ): Promise<DepositDetailResponseDto> {
     this._logger.error(
       `PSP orderId mismatch on deposit=${row.id}: expected=${row.orderId} actual=${actualOrderId}`,
     );
-    await this._database.db
+    await this._databaseService.db
       .insert(financialDiscrepancies)
       .values({
         id: generateUuidV7(),
@@ -539,17 +532,17 @@ export class DepositService {
   }
 
   private async _reschedulePoll(
-    row: DepositRow,
+    row: DepositEntity,
     targetStatus: string,
   ): Promise<DepositDetailResponseDto> {
     return this._updateUnsettledDeposit(row, {
       status: targetStatus,
-      nextPollAt: new Date(Date.now() + addJitterMs(POLL_BACKOFF_MS)),
+      nextPollAt: new Date(Date.now() + addJitterMs(DEPOSIT_POLL_BACKOFF_MS)),
     });
   }
 
   private async _markDepositFailedIfUnsettled(
-    row: DepositRow,
+    row: DepositEntity,
     nextPollAt: Date | null,
   ): Promise<DepositDetailResponseDto> {
     return this._updateUnsettledDeposit(row, {
@@ -559,11 +552,11 @@ export class DepositService {
   }
 
   private async _updateUnsettledDeposit(
-    row: DepositRow,
+    row: DepositEntity,
     patch: { status: string; nextPollAt: Date | null },
   ): Promise<DepositDetailResponseDto> {
     const now = new Date();
-    const [updated] = await this._database.db
+    const [updated] = await this._databaseService.db
       .update(deposits)
       .set({
         status: patch.status,
@@ -582,10 +575,10 @@ export class DepositService {
       .returning();
 
     const current = updated ?? (await this._requireDeposit(row.id));
-    return this._toDetailDto(current);
+    return toDepositDetailResponseDto(current);
   }
 
-  private async _requireDeposit(depositId: string): Promise<DepositRow> {
+  private async _requireDeposit(depositId: string): Promise<DepositEntity> {
     const row = await this._findDepositById(depositId);
     if (!row) {
       throw new DomainException(
@@ -605,7 +598,7 @@ export class DepositService {
   }): Promise<DepositDetailResponseDto> {
     const preRead = await this._requireDeposit(params.depositId);
     if (preRead.status === 'SUCCEEDED') {
-      return this._toDetailDto(preRead);
+      return toDepositDetailResponseDto(preRead);
     }
 
     const availableSpec = {
@@ -618,7 +611,7 @@ export class DepositService {
       accountSpecs: [availableSpec],
     });
 
-    const settled = await this._database.runInTransaction(async (tx) => {
+    const settled = await this._databaseService.runInTransaction(async (tx) => {
       const [locked] = await tx
         .select()
         .from(deposits)
@@ -728,25 +721,7 @@ export class DepositService {
       return updated ?? locked;
     });
 
-    return this._toDetailDto(settled);
-  }
-
-  private _toDetailDto(row: DepositRow): DepositDetailResponseDto {
-    return {
-      depositId: row.id,
-      userId: row.userId,
-      requestedAmount: row.requestedAmount,
-      verifiedAmount: row.verifiedAmount,
-      amountMismatch: row.amountMismatch,
-      pspToken: row.pspToken,
-      pspRefId: row.pspRefId,
-      paymentUrl: row.paymentUrl,
-      status: row.status,
-      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
-      verifiedAt: row.verifiedAt ? row.verifiedAt.toISOString() : null,
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
-    };
+    return toDepositDetailResponseDto(settled);
   }
 
   private readonly _logger = new Logger(DepositService.name);

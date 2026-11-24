@@ -7,47 +7,15 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { getCorrelationId } from '../context/request-context.js';
+import { getCorrelationId } from '../context/request-context.util.js';
 import { DomainException } from '../errors/domain.exception.js';
-import { ErrorCode, type ErrorCodeValue } from '../errors/error-codes.js';
-
-const VALID_ERROR_CODES = new Set<string>(Object.values(ErrorCode));
-
-const STATUS_TO_DEFAULT_CODE: Readonly<Record<number, ErrorCodeValue>> = {
-  [HttpStatus.BAD_REQUEST]: ErrorCode.INVALID_REQUEST,
-  [HttpStatus.UNAUTHORIZED]: ErrorCode.UNAUTHORIZED,
-  [HttpStatus.FORBIDDEN]: ErrorCode.FORBIDDEN,
-  [HttpStatus.NOT_FOUND]: ErrorCode.NOT_FOUND,
-  [HttpStatus.CONFLICT]: ErrorCode.IDEMPOTENCY_IN_PROGRESS,
-  [HttpStatus.UNPROCESSABLE_ENTITY]: ErrorCode.INVALID_REQUEST,
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function toErrorCode(value: unknown): ErrorCodeValue | undefined {
-  if (typeof value === 'string' && VALID_ERROR_CODES.has(value)) {
-    return Object.values(ErrorCode).find((code) => code === value);
-  }
-  return undefined;
-}
-
-function extractMessage(body: string | object, fallback: string): string {
-  if (typeof body === 'string') {
-    return body;
-  }
-  if (isRecord(body) && 'message' in body) {
-    const candidate = body.message;
-    if (Array.isArray(candidate)) {
-      return candidate.filter((item) => typeof item === 'string').join('; ');
-    }
-    if (typeof candidate === 'string' && candidate.length > 0) {
-      return candidate;
-    }
-  }
-  return fallback;
-}
+import { ErrorCode } from '../errors/error-codes.js';
+import {
+  extractExceptionMessage,
+  isRecord,
+  STATUS_TO_DEFAULT_CODE,
+  toErrorCode,
+} from './exception-response.util.js';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -102,7 +70,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     res.status(status).json({
       code: customCode ?? defaultCode,
-      message: extractMessage(body, exception.message),
+      message: extractExceptionMessage(body, exception.message),
     });
   }
 

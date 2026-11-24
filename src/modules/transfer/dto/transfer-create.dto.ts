@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator.js';
 import { UserIdField } from '../../../common/decorators/user-id-field.decorator.js';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.js';
+import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
 
 export class TransferCreateDto {
   @UserIdField('Sender user identifier', 'user_alice')

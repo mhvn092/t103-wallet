@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { assertValidUuid } from '../../common/utils/uuid-validation.js';
+import { assertValidUuid } from '../../common/utils/uuid-validation.util.js';
 import { DatabaseService } from '../../database/database.service.js';
 import { processedEvents } from '../../database/schema/index.js';
 
 @Injectable()
 export class BalanceEventConsumerService {
-  constructor(private readonly _database: DatabaseService) {}
+  constructor(private readonly _databaseService: DatabaseService) {}
 
   async processEvent(params: {
     eventId: string;
@@ -17,7 +17,7 @@ export class BalanceEventConsumerService {
       return { applied: false };
     }
 
-    return this._database.runInTransaction(async (tx) => {
+    return this._databaseService.runInTransaction(async (tx) => {
       const inserted = await tx
         .insert(processedEvents)
         .values({

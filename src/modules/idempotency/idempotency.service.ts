@@ -2,25 +2,22 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { and, eq, lte, or, sql } from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
-import { sha256CanonicalJson } from '../../common/utils/canonical-json.js';
+import { sha256CanonicalJson } from '../../common/utils/canonical-json.util.js';
 import { DatabaseService } from '../../database/database.service.js';
 import type { DbTransaction } from '../../database/database.types.js';
 import { idempotencyKeys } from '../../database/schema/index.js';
-
-const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
-
-export interface IdempotentExecutionResult<T> {
-  replayed: boolean;
-  statusCode: number;
-  body: T;
-}
-
-type ExistingRecordOutcome<T> =
-  { kind: 'REPLAY'; statusCode: number; body: T } | { kind: 'IN_PROGRESS' };
+import {
+  IDEMPOTENCY_DEFAULT_LEASE_MS,
+  IDEMPOTENCY_DEFAULT_TTL_MS,
+} from './idempotency.constants.js';
+import type {
+  ExistingRecordOutcome,
+  IdempotentExecutionResult,
+} from './idempotency.types.js';
 
 @Injectable()
 export class IdempotencyService {
-  constructor(private readonly _database: DatabaseService) {}
+  constructor(private readonly _databaseService: DatabaseService) {}
 
   /**
    * Executes a DB-only mutating operation inside a READ COMMITTED transaction whose
@@ -34,10 +31,10 @@ export class IdempotencyService {
     handler: (tx: DbTransaction) => Promise<T>;
   }): Promise<IdempotentExecutionResult<T>> {
     const requestHash = sha256CanonicalJson(params.requestBody);
-    const expiresAt = new Date(Date.now() + DEFAULT_TTL_MS);
+    const expiresAt = new Date(Date.now() + IDEMPOTENCY_DEFAULT_TTL_MS);
     const targetStatus = params.statusCode ?? HttpStatus.CREATED;
 
-    return this._database.runInTransaction(async (tx) => {
+    return this._databaseService.runInTransaction(async (tx) => {
       const [claimed] = await tx
         .insert(idempotencyKeys)
         .values({
@@ -114,10 +111,12 @@ export class IdempotencyService {
   > {
     const requestHash = sha256CanonicalJson(params.requestBody);
     const now = new Date();
-    const lockedUntil = new Date(now.getTime() + (params.leaseMs ?? 60_000));
-    const expiresAt = new Date(now.getTime() + DEFAULT_TTL_MS);
+    const lockedUntil = new Date(
+      now.getTime() + (params.leaseMs ?? IDEMPOTENCY_DEFAULT_LEASE_MS),
+    );
+    const expiresAt = new Date(now.getTime() + IDEMPOTENCY_DEFAULT_TTL_MS);
 
-    return this._database.runInTransaction(async (tx) => {
+    return this._databaseService.runInTransaction(async (tx) => {
       const [inserted] = await tx
         .insert(idempotencyKeys)
         .values({
@@ -190,7 +189,7 @@ export class IdempotencyService {
     body: T;
     executor?: DbTransaction;
   }): Promise<void> {
-    const db = params.executor ?? this._database.db;
+    const db = params.executor ?? this._databaseService.db;
     const updated = await db
       .update(idempotencyKeys)
       .set({
@@ -223,7 +222,7 @@ export class IdempotencyService {
     key: string,
     leaseVersion: bigint,
   ): Promise<void> {
-    await this._database.db
+    await this._databaseService.db
       .delete(idempotencyKeys)
       .where(
         and(

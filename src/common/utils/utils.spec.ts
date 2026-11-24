@@ -1,9 +1,9 @@
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { addPositiveJitterMs, computeSafeLeaseMs } from './backoff.js';
-import { sha256CanonicalJson } from './canonical-json.js';
-import { getTehranDateString } from './tehran-date.js';
-import { generateUuidV7 } from './uuidv7.js';
+import { addPositiveJitterMs, computeSafeLeaseMs } from './backoff.util.js';
+import { sha256CanonicalJson } from './canonical-json.util.js';
+import { getTehranDateString } from './tehran-date.util.js';
+import { generateUuidV7 } from './uuidv7.util.js';
 
 describe('core utilities (uuidv7, canonical-json, tehran-date)', () => {
   it('generates monotonic RFC-9562 UUIDv7 strings', () => {

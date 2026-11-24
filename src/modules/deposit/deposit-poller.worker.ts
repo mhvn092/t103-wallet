@@ -5,14 +5,14 @@ import type { EnvConfig } from '../../config/env.validation.js';
 import { DepositService } from './deposit.service.js';
 
 @Injectable()
-export class DepositPoller extends IntervalWorkerBase {
-  protected readonly workerName = DepositPoller.name;
+export class DepositPollerWorker extends IntervalWorkerBase {
+  protected readonly workerName = DepositPollerWorker.name;
 
   constructor(
-    config: ConfigService<EnvConfig, true>,
+    configService: ConfigService<EnvConfig, true>,
     private readonly _depositService: DepositService,
   ) {
-    super(config);
+    super(configService);
   }
 
   protected async runTick(): Promise<void> {

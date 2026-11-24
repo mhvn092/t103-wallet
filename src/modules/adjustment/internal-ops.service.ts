@@ -1,14 +1,15 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { eq, sql } from 'drizzle-orm';
+import { PAUSED_WITHDRAWALS_CONTROL_KEY } from '../../common/constants/system-controls.constants.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   type Currency,
   formatMinorToApi,
   parseAmountToMinor,
-} from '../../common/utils/money.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.js';
+} from '../../common/utils/money.util.js';
+import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import {
@@ -18,30 +19,22 @@ import {
   userRestrictions,
   withdrawals,
 } from '../../database/schema/index.js';
-import {
-  IdempotencyService,
-  type IdempotentExecutionResult,
-} from '../idempotency/idempotency.service.js';
+import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
+import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import type { InternalMetricsResponseDto } from './dto/internal-metrics-response.dto.js';
-import type {
-  ReceivableSettleDto,
-  ReceivableSettleResponseDto,
-} from './dto/receivable-settle.dto.js';
-import type {
-  WithdrawalsPauseDto,
-  WithdrawalsPauseResponseDto,
-} from './dto/withdrawals-pause.dto.js';
-
-const PAUSED_WITHDRAWALS_CONTROL_KEY = 'withdrawals_paused_currencies';
+import type { ReceivableSettleResponseDto } from './dto/receivable-settle-response.dto.js';
+import type { ReceivableSettleDto } from './dto/receivable-settle.dto.js';
+import type { WithdrawalsPauseResponseDto } from './dto/withdrawals-pause-response.dto.js';
+import type { WithdrawalsPauseDto } from './dto/withdrawals-pause.dto.js';
 
 @Injectable()
 export class InternalOpsService {
   constructor(
-    private readonly _config: ConfigService<EnvConfig, true>,
-    private readonly _database: DatabaseService,
-    private readonly _idempotency: IdempotencyService,
+    private readonly _configService: ConfigService<EnvConfig, true>,
+    private readonly _databaseService: DatabaseService,
+    private readonly _idempotencyService: IdempotencyService,
     private readonly _walletService: WalletService,
     private readonly _ledgerService: LedgerService,
   ) {}
@@ -74,98 +67,102 @@ export class InternalOpsService {
       restrictionUserIds: [dto.userId],
     });
 
-    return this._idempotency.executeInTransaction<ReceivableSettleResponseDto>({
-      scope: `POST:/internal/receivables/settle:${dto.userId}`,
-      key: params.idempotencyKey,
-      requestBody: dto,
-      statusCode: HttpStatus.OK,
-      handler: async (tx) => {
-        const frozen = await this._walletService.lockUserRestriction(
-          tx,
-          dto.userId,
-        );
-        const lockedAccounts =
-          await this._walletService.lockUserAccountsCanonical(tx, [
+    return this._idempotencyService.executeInTransaction<ReceivableSettleResponseDto>(
+      {
+        scope: `POST:/internal/receivables/settle:${dto.userId}`,
+        key: params.idempotencyKey,
+        requestBody: dto,
+        statusCode: HttpStatus.OK,
+        handler: async (tx) => {
+          const frozen = await this._walletService.lockUserRestriction(
+            tx,
+            dto.userId,
+          );
+          const lockedAccounts =
+            await this._walletService.lockUserAccountsCanonical(tx, [
+              availableSpec,
+              receivableSpec,
+              otherReceivableSpec,
+            ]);
+          const userAvailable = this._walletService.getRequiredLockedAccount(
+            lockedAccounts,
             availableSpec,
+          );
+          const userReceivable = this._walletService.getRequiredLockedAccount(
+            lockedAccounts,
             receivableSpec,
-            otherReceivableSpec,
-          ]);
-        const userAvailable = this._walletService.getRequiredLockedAccount(
-          lockedAccounts,
-          availableSpec,
-        );
-        const userReceivable = this._walletService.getRequiredLockedAccount(
-          lockedAccounts,
-          receivableSpec,
-        );
-        const otherReceivableRow = this._walletService.getRequiredLockedAccount(
-          lockedAccounts,
-          otherReceivableSpec,
-        );
+          );
+          const otherReceivableRow =
+            this._walletService.getRequiredLockedAccount(
+              lockedAccounts,
+              otherReceivableSpec,
+            );
 
-        const available = BigInt(userAvailable.balance ?? '0');
-        const receivable = BigInt(userReceivable.balance ?? '0');
-        const otherReceivable = BigInt(otherReceivableRow.balance ?? '0');
+          const available = BigInt(userAvailable.balance ?? '0');
+          const receivable = BigInt(userReceivable.balance ?? '0');
+          const otherReceivable = BigInt(otherReceivableRow.balance ?? '0');
 
-        const settleAmount = this._resolveSettlementAmount(
-          dto,
-          available,
-          receivable,
-        );
-        const settlementId = generateUuidV7();
+          const settleAmount = this._resolveSettlementAmount(
+            dto,
+            available,
+            receivable,
+          );
+          const settlementId = generateUuidV7();
 
-        await this._ledgerService.postTransaction(tx, {
-          type: 'RECEIVABLE_SETTLE',
-          referenceType: 'ADJUSTMENT',
-          referenceId: settlementId,
-          description: `Manual/ops settlement of ${dto.currency} receivable balance`,
-          metadata: {
-            operatorId: params.operatorId,
+          await this._ledgerService.postTransaction(tx, {
+            type: 'RECEIVABLE_SETTLE',
+            referenceType: 'ADJUSTMENT',
+            referenceId: settlementId,
+            description: `Manual/ops settlement of ${dto.currency} receivable balance`,
+            metadata: {
+              operatorId: params.operatorId,
+              currency: dto.currency,
+              settledAmount: settleAmount.toString(),
+            },
+            postings: [
+              {
+                account: userAvailable,
+                direction: 'DEBIT',
+                amount: settleAmount,
+              },
+              {
+                account: userReceivable,
+                direction: 'CREDIT',
+                amount: settleAmount,
+              },
+            ],
+          });
+
+          const remainingReceivable = receivable - settleAmount;
+          const allCleared =
+            remainingReceivable === 0n && otherReceivable === 0n;
+          const nextFrozen = allCleared ? false : frozen;
+
+          if (frozen && allCleared) {
+            await tx
+              .update(userRestrictions)
+              .set({
+                outboundFrozen: false,
+                freezeReason: null,
+                updatedAt: new Date(),
+              })
+              .where(eq(userRestrictions.userId, dto.userId));
+          }
+
+          return {
+            settlementId,
+            userId: dto.userId,
             currency: dto.currency,
-            settledAmount: settleAmount.toString(),
-          },
-          postings: [
-            {
-              account: userAvailable,
-              direction: 'DEBIT',
-              amount: settleAmount,
-            },
-            {
-              account: userReceivable,
-              direction: 'CREDIT',
-              amount: settleAmount,
-            },
-          ],
-        });
-
-        const remainingReceivable = receivable - settleAmount;
-        const allCleared = remainingReceivable === 0n && otherReceivable === 0n;
-        const nextFrozen = allCleared ? false : frozen;
-
-        if (frozen && allCleared) {
-          await tx
-            .update(userRestrictions)
-            .set({
-              outboundFrozen: false,
-              freezeReason: null,
-              updatedAt: new Date(),
-            })
-            .where(eq(userRestrictions.userId, dto.userId));
-        }
-
-        return {
-          settlementId,
-          userId: dto.userId,
-          currency: dto.currency,
-          settledAmount: formatMinorToApi(settleAmount, dto.currency),
-          remainingReceivable: formatMinorToApi(
-            remainingReceivable,
-            dto.currency,
-          ),
-          outboundFrozen: nextFrozen,
-        };
+            settledAmount: formatMinorToApi(settleAmount, dto.currency),
+            remainingReceivable: formatMinorToApi(
+              remainingReceivable,
+              dto.currency,
+            ),
+            outboundFrozen: nextFrozen,
+          };
+        },
       },
-    });
+    );
   }
 
   async setPausedWithdrawals(
@@ -173,7 +170,7 @@ export class InternalOpsService {
   ): Promise<WithdrawalsPauseResponseDto> {
     const currencies = [...new Set(dto.currencies)];
     const now = new Date();
-    const [saved] = await this._database.db
+    const [saved] = await this._databaseService.db
       .insert(systemControls)
       .values({
         key: PAUSED_WITHDRAWALS_CONTROL_KEY,
@@ -206,7 +203,7 @@ export class InternalOpsService {
       return this._driftRefreshInFlight;
     }
 
-    const refreshPromise = this._database.pool
+    const refreshPromise = this._databaseService.pool
       .query<{ drift_count: number }>(
         `
         SELECT COUNT(*)::int AS drift_count FROM (
@@ -244,20 +241,20 @@ export class InternalOpsService {
       driftCount,
       pauseControl,
     ] = await Promise.all([
-      this._database.db
+      this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(financialDiscrepancies)
         .where(eq(financialDiscrepancies.status, 'OPEN')),
-      this._database.db
+      this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(withdrawals)
         .where(eq(withdrawals.status, 'MANUAL_REVIEW')),
-      this._database.db
+      this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(outboxEvents)
         .where(eq(outboxEvents.status, 'PENDING')),
       this._getCachedBalanceDriftAccounts(),
-      this._database.db
+      this._databaseService.db
         .select({ value: systemControls.value })
         .from(systemControls)
         .where(eq(systemControls.key, PAUSED_WITHDRAWALS_CONTROL_KEY))
@@ -281,10 +278,10 @@ export class InternalOpsService {
   }
 
   private _getCachedBalanceDriftAccounts(): Promise<number> {
-    const intervalMs = this._config.get('DRIFT_AUDIT_INTERVAL_MS', {
+    const intervalMs = this._configService.get('DRIFT_AUDIT_INTERVAL_MS', {
       infer: true,
     });
-    const workersEnabled = this._config.get('WORKERS_ENABLED', {
+    const workersEnabled = this._configService.get('WORKERS_ENABLED', {
       infer: true,
     });
     const isFresh =

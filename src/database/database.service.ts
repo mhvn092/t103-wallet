@@ -1,6 +1,5 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import type { EnvConfig } from '../config/env.validation.js';
@@ -12,9 +11,9 @@ export class DatabaseService implements OnModuleDestroy {
   readonly pool: Pool;
   readonly db: AppDatabase;
 
-  constructor(config: ConfigService<EnvConfig, true>) {
+  constructor(configService: ConfigService<EnvConfig, true>) {
     this.pool = new Pool({
-      connectionString: config.get('DATABASE_URI', { infer: true }),
+      connectionString: configService.get('DATABASE_URI', { infer: true }),
       max: 25,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
@@ -27,19 +26,37 @@ export class DatabaseService implements OnModuleDestroy {
   }
 
   async ping(timeoutMs: number): Promise<void> {
+    const safeTimeoutMs = Math.max(100, Math.trunc(timeoutMs));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         reject(
           new Error(
-            `PostgreSQL readiness check timed out after ${timeoutMs}ms`,
+            `PostgreSQL readiness check timed out after ${safeTimeoutMs}ms`,
           ),
         );
-      }, timeoutMs);
+      }, safeTimeoutMs);
     });
 
+    const queryPromise = (async () => {
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN READ ONLY');
+        await client.query("SELECT set_config('statement_timeout', $1, true)", [
+          String(safeTimeoutMs),
+        ]);
+        await client.query('SELECT 1');
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      } finally {
+        client.release();
+      }
+    })();
+
     try {
-      await Promise.race([this.db.execute(sql`SELECT 1`), timeoutPromise]);
+      await Promise.race([queryPromise, timeoutPromise]);
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);

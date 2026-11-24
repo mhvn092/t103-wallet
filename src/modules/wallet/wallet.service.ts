@@ -6,15 +6,15 @@ import {
   CURRENCIES,
   type Currency,
   formatMinorToApi,
-} from '../../common/utils/money.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.js';
+} from '../../common/utils/money.util.js';
+import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import { DatabaseService } from '../../database/database.service.js';
 import type {
   DbExecutor,
   DbTransaction,
 } from '../../database/database.types.js';
 import {
-  type AccountRow,
+  type AccountEntity,
   accounts,
   ledgerItems,
   ledgerTransactions,
@@ -33,7 +33,7 @@ import {
 
 @Injectable()
 export class WalletService {
-  constructor(private readonly _database: DatabaseService) {}
+  constructor(private readonly _databaseService: DatabaseService) {}
 
   /**
    * Check-first then sorted autocommit scaffold creation outside TX1 so 0-balance shell rows
@@ -55,7 +55,7 @@ export class WalletService {
           `${b.userId}|${b.limitDate}`,
         ),
       );
-      await this._database.db
+      await this._databaseService.db
         .insert(userDailyLimits)
         .values(
           sortedLimits.map((k) => ({
@@ -69,7 +69,7 @@ export class WalletService {
 
     if (params.restrictionUserIds && params.restrictionUserIds.length > 0) {
       const sortedUsers = [...new Set(params.restrictionUserIds)].sort();
-      await this._database.db
+      await this._databaseService.db
         .insert(userRestrictions)
         .values(
           sortedUsers.map((userId) => ({
@@ -87,7 +87,7 @@ export class WalletService {
   async lockUserAccountsCanonical(
     tx: DbTransaction,
     specs: AccountSpec[],
-  ): Promise<Map<string, AccountRow>> {
+  ): Promise<Map<string, AccountEntity>> {
     const sortedSpecs = this._sortAccountSpecs(specs);
     const userIds = [...new Set(sortedSpecs.map((s) => s.userId))];
     const currencies = [...new Set(sortedSpecs.map((s) => s.currency))];
@@ -107,7 +107,7 @@ export class WalletService {
       .orderBy(asc(accounts.id))
       .for('update');
 
-    const map = new Map<string, AccountRow>();
+    const map = new Map<string, AccountEntity>();
     for (const row of rows) {
       map.set(`${row.ownerId}|${row.currency}|${row.accountType}`, row);
     }
@@ -119,9 +119,9 @@ export class WalletService {
   }
 
   getRequiredLockedAccount(
-    map: ReadonlyMap<string, AccountRow>,
+    map: ReadonlyMap<string, AccountEntity>,
     spec: AccountSpec,
-  ): AccountRow {
+  ): AccountEntity {
     const key = `${spec.userId}|${spec.currency}|${spec.accountType}`;
     const row = map.get(key);
     if (!row) {
@@ -141,7 +141,7 @@ export class WalletService {
     executor: DbExecutor,
     ownerId: SystemOwnerId,
     currency: Currency,
-  ): Promise<AccountRow> {
+  ): Promise<AccountEntity> {
     const [row] = await executor
       .select()
       .from(accounts)
@@ -165,7 +165,7 @@ export class WalletService {
   }
 
   async getWalletBalances(userId: string): Promise<WalletBalancesResponseDto> {
-    const rows = await this._database.db
+    const rows = await this._databaseService.db
       .select({
         currency: accounts.currency,
         accountType: accounts.accountType,
@@ -218,7 +218,7 @@ export class WalletService {
       conditions.push(lt(ledgerItems.id, params.cursor));
     }
 
-    const rows = await this._database.db
+    const rows = await this._databaseService.db
       .select({
         id: ledgerItems.id,
         transactionId: ledgerItems.transactionId,
@@ -327,7 +327,7 @@ export class WalletService {
     dedupedSpecs: AccountSpec[],
   ): Promise<void> {
     const userIds = [...new Set(dedupedSpecs.map((s) => s.userId))];
-    const existing = await this._database.db
+    const existing = await this._databaseService.db
       .select({
         ownerId: accounts.ownerId,
         currency: accounts.currency,
@@ -346,7 +346,7 @@ export class WalletService {
     );
 
     if (missing.length > 0) {
-      await this._database.db
+      await this._databaseService.db
         .insert(accounts)
         .values(
           missing.map((spec) => ({

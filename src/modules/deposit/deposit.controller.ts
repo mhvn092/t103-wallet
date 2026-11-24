@@ -82,8 +82,9 @@ export class DepositController {
     description: 'Callback acknowledged',
     type: DepositCallbackAckDto,
   })
+  @ApiErrorResponses(HttpStatus.BAD_REQUEST)
   @HttpCode(HttpStatus.OK)
   handleCallback(@Req() req: Request): Promise<DepositCallbackAckDto> {
-    return this._depositService.handlePspCallback(req.body);
+    return this._depositService.handlePspCallback(req.body as unknown);
   }
 }

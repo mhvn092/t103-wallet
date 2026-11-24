@@ -1,8 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { z } from 'zod';
-import { type Currency, formatMinorToApi } from '../../common/utils/money.js';
+import {
+  type Currency,
+  formatMinorToApi,
+} from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
+import {
+  payoutAcceptedSchema,
+  payoutErrorSchema,
+  payoutInquirySchema,
+} from './payout.schemas.js';
 import {
   requestProviderJson,
   toSafeIrrPayloadAmount,
@@ -12,34 +19,11 @@ import type {
   PayoutTransferStatusResult,
 } from './provider.types.js';
 
-const payoutAcceptedSchema = z.object({
-  trackingId: z.string().nullish(),
-  id: z.string().nullish(),
-});
-
-const payoutErrorSchema = z.object({
-  reason: z.string().nullish(),
-  message: z.string().nullish(),
-});
-
-const payoutInquirySchema = z.object({
-  status: z.enum([
-    'PENDING',
-    'PROCESSING',
-    'SUCCEEDED',
-    'FAILED',
-    'RETURNED',
-    'REVERSED',
-  ]),
-  trackingId: z.string().nullish(),
-  refId: z.string().nullish(),
-  reason: z.string().nullish(),
-  failureReason: z.string().nullish(),
-});
-
 @Injectable()
 export class PayoutClient {
-  constructor(private readonly _config: ConfigService<EnvConfig, true>) {}
+  constructor(
+    private readonly _configService: ConfigService<EnvConfig, true>,
+  ) {}
 
   async createTransfer(params: {
     requestId: string;
@@ -53,7 +37,7 @@ export class PayoutClient {
         : formatMinorToApi(params.amountMinor, 'USDT');
 
     const outcome = await requestProviderJson({
-      config: this._config,
+      config: this._configService,
       baseUrlKey: 'PAYOUT_BASE_URL',
       path: '/payout/transfers',
       method: 'POST',
@@ -96,7 +80,7 @@ export class PayoutClient {
 
   async getTransfer(requestId: string): Promise<PayoutTransferStatusResult> {
     const outcome = await requestProviderJson({
-      config: this._config,
+      config: this._configService,
       baseUrlKey: 'PAYOUT_BASE_URL',
       path: `/payout/transfers/${encodeURIComponent(requestId)}`,
       method: 'GET',
@@ -110,11 +94,7 @@ export class PayoutClient {
       return { kind: 'NOT_FOUND' };
     }
 
-    if (
-      outcome.status >= 500 ||
-      outcome.status < 200 ||
-      outcome.status >= 300
-    ) {
+    if (outcome.status < 200 || outcome.status >= 300) {
       return {
         kind: 'AMBIGUOUS',
         reason: `Payout inquiry returned HTTP ${outcome.status}`,

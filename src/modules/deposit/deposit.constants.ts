@@ -1,0 +1,4 @@
+export const DEPOSIT_INIT_LEASE_MS = 60_000;
+export const ORPHAN_INITIATED_AGE_MS = 65_000;
+export const DEPOSIT_POLL_BACKOFF_MS = 5_000;
+export const DEPOSIT_POLL_CLAIM_LEASE_MS = 15_000;

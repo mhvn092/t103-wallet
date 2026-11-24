@@ -1,9 +1,7 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { sql } from 'drizzle-orm';
-import { DomainException } from '../../common/errors/domain.exception.js';
-import { ErrorCode } from '../../common/errors/error-codes.js';
-import { formatMinorToApi } from '../../common/utils/money.js';
+import { formatMinorToApi } from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import { deposits } from '../../database/schema/index.js';
@@ -13,45 +11,21 @@ import type {
   ReconciliationResponseDto,
 } from './dto/reconciliation-response.dto.js';
 import {
-  type CsvDepositRecord,
+  assertValidCalendarDate,
+  formatSignedIrtMinor,
+} from './reconciliation-date.util.js';
+import type { ReconciliationLocalDeposit } from './reconciliation.types.js';
+import {
   normalizeSettlementReference,
   parseSettlementCsv,
 } from './settlement-csv.parser.js';
-
-type DepositRow = typeof deposits.$inferSelect;
-
-function formatSignedIrtMinor(minor: bigint): string {
-  return minor < 0n
-    ? `-${formatMinorToApi(-minor, 'IRT')}`
-    : formatMinorToApi(minor, 'IRT');
-}
-
-function assertValidCalendarDate(dateStr: string): string {
-  const [yStr, mStr, dStr] = dateStr.split('-');
-  const year = Number(yStr);
-  const month = Number(mStr);
-  const day = Number(dStr);
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
-  ) {
-    throw new DomainException(
-      HttpStatus.BAD_REQUEST,
-      ErrorCode.INVALID_REQUEST,
-      `Invalid calendar date: ${dateStr}`,
-    );
-  }
-  return dateStr;
-}
+import type { CsvDepositRecord } from './settlement-csv.types.js';
 
 @Injectable()
 export class ReconciliationService {
   constructor(
-    private readonly _config: ConfigService<EnvConfig, true>,
-    private readonly _database: DatabaseService,
+    private readonly _configService: ConfigService<EnvConfig, true>,
+    private readonly _databaseService: DatabaseService,
     private readonly _pspClient: PspClient,
   ) {}
 
@@ -114,10 +88,15 @@ export class ReconciliationService {
     dateStr: string,
     startOffsetDays: number,
     endOffsetDaysExclusive: number,
-  ): Promise<DepositRow[]> {
-    const tz = this._config.get('RECONCILIATION_TZ', { infer: true });
-    return this._database.db
-      .select()
+  ): Promise<ReconciliationLocalDeposit[]> {
+    const tz = this._configService.get('RECONCILIATION_TZ', { infer: true });
+    // Narrowed projection aligns with covering index deposits_verified_at_idx INCLUDE (id, psp_ref_id, verified_amount)
+    return this._databaseService.db
+      .select({
+        id: deposits.id,
+        pspRefId: deposits.pspRefId,
+        verifiedAmount: deposits.verifiedAmount,
+      })
       .from(deposits)
       .where(
         sql`${deposits.status} = 'SUCCEEDED'
@@ -127,9 +106,9 @@ export class ReconciliationService {
   }
 
   private _groupDepositsByNormalizedRef(
-    rows: DepositRow[],
-  ): Map<string, DepositRow[]> {
-    const map = new Map<string, DepositRow[]>();
+    rows: ReconciliationLocalDeposit[],
+  ): Map<string, ReconciliationLocalDeposit[]> {
+    const map = new Map<string, ReconciliationLocalDeposit[]>();
     for (const row of rows) {
       if (!row.pspRefId) {
         continue;
@@ -146,9 +125,9 @@ export class ReconciliationService {
   }
 
   private _consumeMatchingCandidate(
-    candidates: DepositRow[] | undefined,
+    candidates: ReconciliationLocalDeposit[] | undefined,
     expectedAmountIrt: bigint,
-  ): DepositRow | undefined {
+  ): ReconciliationLocalDeposit | undefined {
     if (!candidates || candidates.length === 0) {
       return undefined;
     }
@@ -163,7 +142,7 @@ export class ReconciliationService {
 
   private _reconcileCsvRow(
     csvRow: CsvDepositRecord,
-    localByRef: Map<string, DepositRow[]>,
+    localByRef: Map<string, ReconciliationLocalDeposit[]>,
     consumedLocalIds: Set<string>,
   ): { matched: boolean; mismatch?: ReconciliationMismatchDto } {
     const candidates = localByRef.get(csvRow.normalizedReference);
@@ -226,7 +205,7 @@ export class ReconciliationService {
   }
 
   private _checkMissingInCsv(
-    local: DepositRow,
+    local: ReconciliationLocalDeposit,
     consumedLocalIds: Set<string>,
   ): ReconciliationMismatchDto | undefined {
     if (consumedLocalIds.has(local.id)) {
