@@ -30,8 +30,8 @@ const POLL_BACKOFF_MS = 5_000;
 const POLL_CLAIM_LEASE_MS = 15_000;
 
 const pspCallbackPayloadSchema = z.object({
-  token: z.string().min(1).optional(),
-  orderId: z.string().min(1).optional(),
+  token: z.string().min(1).nullish(),
+  orderId: z.string().min(1).nullish(),
 });
 
 type DepositRow = typeof deposits.$inferSelect;
@@ -142,7 +142,9 @@ export class DepositService {
       return { received: true };
     }
 
-    const row = await this._findDepositByCallback(parsed.data);
+    const token = parsed.data.token ?? undefined;
+    const orderId = parsed.data.orderId ?? undefined;
+    const row = await this._findDepositByCallback({ token, orderId });
     if (!row) {
       return { received: true };
     }

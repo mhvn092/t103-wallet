@@ -44,7 +44,7 @@ const PROCESSING_POLL_DELAY_MS = 3_000;
 const PROCESSING_POLL_LEASE_MS = 15_000;
 
 const payoutWebhookSchema = z.object({
-  requestId: z.string().min(1).optional(),
+  requestId: z.string().min(1).nullish(),
   status: z
     .enum([
       'PENDING',
@@ -54,11 +54,11 @@ const payoutWebhookSchema = z.object({
       'RETURNED',
       'REVERSED',
     ])
-    .optional(),
-  trackingId: z.string().optional(),
-  refId: z.string().optional(),
-  reason: z.string().optional(),
-  failureReason: z.string().optional(),
+    .nullish(),
+  trackingId: z.string().nullish(),
+  refId: z.string().nullish(),
+  reason: z.string().nullish(),
+  failureReason: z.string().nullish(),
 });
 
 type WithdrawalRow = typeof withdrawals.$inferSelect;

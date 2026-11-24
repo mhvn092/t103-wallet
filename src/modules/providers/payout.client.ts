@@ -13,13 +13,13 @@ import type {
 } from './provider.types.js';
 
 const payoutAcceptedSchema = z.object({
-  trackingId: z.string().optional(),
-  id: z.string().optional(),
+  trackingId: z.string().nullish(),
+  id: z.string().nullish(),
 });
 
 const payoutErrorSchema = z.object({
-  reason: z.string().optional(),
-  message: z.string().optional(),
+  reason: z.string().nullish(),
+  message: z.string().nullish(),
 });
 
 const payoutInquirySchema = z.object({
@@ -31,10 +31,10 @@ const payoutInquirySchema = z.object({
     'RETURNED',
     'REVERSED',
   ]),
-  trackingId: z.string().optional(),
-  refId: z.string().optional(),
-  reason: z.string().optional(),
-  failureReason: z.string().optional(),
+  trackingId: z.string().nullish(),
+  refId: z.string().nullish(),
+  reason: z.string().nullish(),
+  failureReason: z.string().nullish(),
 });
 
 @Injectable()

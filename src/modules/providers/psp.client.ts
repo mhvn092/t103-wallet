@@ -17,21 +17,21 @@ import type {
 const createPaymentResponseSchema = z.object({
   token: z.string().min(1),
   paymentUrl: z.string().min(1),
-  expiresAt: z.string().optional(),
+  expiresAt: z.string().nullish(),
 });
 
 const paymentStatusSchema = z.object({
   status: z.enum(['INIT', 'PAID', 'VERIFIED', 'FAILED', 'EXPIRED']),
-  amount: z.union([z.string(), z.number()]).optional(),
-  refId: z.string().optional(),
+  amount: z.union([z.string(), z.number()]).nullish(),
+  refId: z.string().nullish(),
 });
 
 const verifyResponseSchema = z.object({
-  code: z.number().optional(),
-  status: z.string().optional(),
-  amount: z.union([z.string(), z.number()]).optional(),
-  refId: z.string().optional(),
-  message: z.string().optional(),
+  code: z.number().nullish(),
+  status: z.string().nullish(),
+  amount: z.union([z.string(), z.number()]).nullish(),
+  refId: z.string().nullish(),
+  message: z.string().nullish(),
 });
 
 @Injectable()
@@ -129,7 +129,7 @@ export class PspClient {
     }
 
     const converted =
-      parsed.data.amount !== undefined
+      parsed.data.amount !== undefined && parsed.data.amount !== null
         ? parseIrrToIrt(parsed.data.amount)
         : null;
     if (converted?.hasRemainder) {
@@ -182,7 +182,8 @@ export class PspClient {
       status === 'ALREADY_VERIFIED';
 
     if (isVerified) {
-      const converted = amount !== undefined ? parseIrrToIrt(amount) : null;
+      const converted =
+        amount !== undefined && amount !== null ? parseIrrToIrt(amount) : null;
       if (!converted || converted.amountIrt <= 0n) {
         return {
           kind: 'RETRYABLE_ERROR',

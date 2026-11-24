@@ -149,11 +149,9 @@ export class AmqpBrokerClient implements OnModuleDestroy {
     this._consumerChannel = null;
     this._connection = null;
 
-    await Promise.all([
-      pub?.close().catch(() => undefined),
-      sub?.close().catch(() => undefined),
-      conn?.close().catch(() => undefined),
-    ]);
+    await pub?.close().catch(() => undefined);
+    await sub?.close().catch(() => undefined);
+    await conn?.close().catch(() => undefined);
   }
 
   private _connection: ChannelModel | null = null;
