@@ -112,6 +112,48 @@
             },
             "url": "{{baseUrl}}/internal/adjustments"
           }
+        },
+        {
+          "name": "Settle User Receivable (IRT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" },
+              { "key": "X-Operator-Id", "value": "ops-ehsan" },
+              { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"currency\": \"IRT\"\n}"
+            },
+            "url": "{{baseUrl}}/internal/receivables/settle"
+          }
+        },
+        {
+          "name": "Pause/Resume Outbound Withdrawals",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currencies\": [\"USDT\"],\n  \"reason\": \"02:10 emergency pause\"\n}"
+            },
+            "url": "{{baseUrl}}/internal/controls/withdrawals-pause"
+          }
+        },
+        {
+          "name": "Get Internal Operational Metrics",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
+            ],
+            "url": "{{baseUrl}}/internal/metrics"
+          }
         }
       ]
     },
@@ -245,7 +287,10 @@
           "name": "Run Daily PSP Settlement Reconciliation",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"date\": \"2026-11-24\"\n}"

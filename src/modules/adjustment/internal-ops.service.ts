@@ -136,7 +136,8 @@ export class InternalOpsService {
         });
 
         const remainingReceivable = receivable - settleAmount;
-        const allCleared = remainingReceivable === 0n && otherReceivable === 0n;
+        const allCleared =
+          remainingReceivable === 0n && otherReceivable === 0n;
         const nextFrozen = allCleared ? false : frozen;
 
         if (frozen && allCleared) {
@@ -297,3 +298,4 @@ export class InternalOpsService {
     return available < receivable ? available : receivable;
   }
 }
+

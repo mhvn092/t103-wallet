@@ -23,3 +23,4 @@ export function runWithRequestContext<T>(requestId: string, fn: () => T): T {
 export function getCorrelationId(): string | undefined {
   return requestContextStorage.getStore()?.requestId;
 }
+

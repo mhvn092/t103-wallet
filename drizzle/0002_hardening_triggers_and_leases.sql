@@ -69,3 +69,4 @@ FOR EACH STATEMENT EXECUTE FUNCTION fn_forbid_ledger_mutation();
 CREATE TRIGGER trg_ledger_items_no_truncate
 BEFORE TRUNCATE ON "ledger_items"
 FOR EACH STATEMENT EXECUTE FUNCTION fn_forbid_ledger_mutation();
+

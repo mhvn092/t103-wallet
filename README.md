@@ -6,15 +6,16 @@ A crash-safe **NestJS 12 (ESM) + PostgreSQL 18 + Drizzle ORM + RabbitMQ** modula
 
 ## Key Architectural Guarantees
 
-- **Zero Floating-Point Arithmetic:** All money uses `NUMERIC(38,0)` minor units in PostgreSQL and exact `bigint` values in TypeScript (`1 IRT = 1 Toman`, `1 USDT = 1,000,000 micro-USDT`). API amounts are serialized strictly as decimal/integer strings. `IRT × 10 <-> IRR` unit translation occurs exclusively at external PSP/Payout boundaries (`ProvidersModule`).
+- **Zero Floating-Point Arithmetic:** All money uses `NUMERIC(38,0)` minor units in PostgreSQL and exact `bigint` values in TypeScript (`1 IRT = 1 Toman`, `1 USDT = 1,000,000 micro-USDT`), bounded at `MAX_AMOUNT_MINOR = 10^15` (`400 INVALID_REQUEST` on overflow). `IRT × 10 <-> IRR` translation occurs exclusively at external PSP/Payout boundaries (`ProvidersModule`).
 - **Database-Enforced Double-Entry Integrity:**
-  - Direct SQL updates to `accounts.balance` are blocked by `trg_accounts_block_direct_balance_update` (`pg_trigger_depth() <= 1` and session GUC guard).
+  - `trg_accounts_block_direct_balance_update` blocks direct `UPDATE accounts.balance`; `trg_accounts_immutable_meta` forbids non-zero `USER` account `INSERT`s and immutable metadata/`normal_side` changes; `BEFORE TRUNCATE` triggers protect append-only `ledger_transactions` and `ledger_items`.
   - Balances mutate **only** inside `BEFORE INSERT ON ledger_items` in the exact same ACID transaction as the balanced `ledger_transactions` commit (`DEFERRABLE` commit trigger enforces per-currency `SUM(DEBIT) = SUM(CREDIT)` and `COUNT(*) >= 2`).
   - `CHECK ((owner_type = 'SYSTEM' AND balance IS NULL) OR (owner_type = 'USER' AND balance >= 0))` makes negative user balances mathematically impossible.
-- **Deadlock-Free Concurrency & Daily Cap:** Statement-#1 `idempotency_keys` claims (`PK(scope, key)` with SHA-256 canonical JSON hashes) precede Canonical Lock Order (`user_daily_limits` -> `user_restrictions` -> `USER` `accounts` ordered by `id ASC`). `100` concurrent withdrawals serialize cleanly against balances and the `200,000,000` IRT daily quota (`Asia/Tehran` `00:00` boundary).
+- **Deadlock-Free Concurrency, User-Scoped Idempotency & Daily Cap:** Statement-#1 user-scoped `idempotency_keys` claims (`PK(route:userId, key)` with SHA-256 canonical JSON hashes, `lease_version` fencing on `/deposits`, and validation inside the TX/lease boundary) precede Canonical Lock Order (`user_daily_limits` -> `user_restrictions` -> `USER` `accounts` ordered by `id ASC`). `100` concurrent withdrawals serialize cleanly against balances and the `200,000,000` IRT daily quota (`Asia/Tehran` `00:00` boundary).
 - **Chaos & Crash Resilience (`SIM_CHAOS=hostile` Verified):**
-  - Pre-checks `GET /psp/payments/{token}` before calling `/psp/verify`, surviving premature `-51` on `INIT`, `503` retries, `code 101` replays, and `AMOUNT_MISMATCH` logging.
-  - Dispatches payouts with `FOR UPDATE SKIP LOCKED`, `version`-fenced leases, `getTransfer` + identical `provider_request_id` re-POST recovery on `503`/`404`, constant-time raw-body HMAC-SHA256 verification (`x-signature`), stale-webhook immunity, `WD_RETURN` reversals, `MANUAL_REVIEW` SLA escalation, and Ambiguity #1 `WD_LATE_SUCCESS` receivable recovery + outbound freeze.
+  - Pre-checks `GET /psp/payments/{token}` before calling `/psp/verify`, checks `orderId` mismatches, flags sub-Toman IRR remainder truncation, fences deposit transitions by `(status, version)`, and keeps a configurable post-expiry grace poll (`DEPOSIT_EXPIRY_GRACE_MS`).
+  - Dispatches payouts with `FOR UPDATE SKIP LOCKED`, `version`-fenced leases, short jittered `503` retry backoff, `getTransfer` + identical `provider_request_id` recovery, constant-time raw-body HMAC verification, `PAYOUT_PAYLOAD_MISMATCH` checks, `SLA` escalation from both `DISPATCHING` and `PROCESSING` to `MANUAL_REVIEW`, `WD_RETURN` (`RECEIVABLE -> AVAILABLE` offset + auto-unfreeze), and Ambiguity #1 `WD_LATE_SUCCESS` protections (immune to duplicate `SUCCEEDED` after `RETURNED` or `CANCELLED_BY_USER`).
+- **Production Operations & Security:** `pg_advisory_lock` serializes concurrent replica migrations, `X-Request-Id` correlation propagates inbound/outbound, `TRUST_PROXY` configures Express IP resolution, `RetentionWorker` purges expired operational rows, and runtime ops controls support emergency currency withdrawal pauses and receivable settlements.
 
 ---
 
@@ -24,16 +25,11 @@ A crash-safe **NestJS 12 (ESM) + PostgreSQL 18 + Drizzle ORM + RabbitMQ** modula
    ```bash
    docker load -i t103-simulator.tar.gz
    ```
-2. Configure environment variables:
-   ```bash
-   cp .env.example .env
-   ```
-   *(Edit `.env` credentials/secrets as needed for local use; `.env` is gitignored.)*
-3. Start PostgreSQL 18, RabbitMQ 4, Simulator (`SIM_CHAOS=default` or `hostile`), automatic DB migrations, and the NestJS API:
+2. Start PostgreSQL 18, RabbitMQ 4, Simulator (`SIM_CHAOS=default` or `hostile`), automatic lock-serialized DB migrations, and the NestJS API directly (safe local defaults are built in; optionally copy `.env.example` to `.env` to customize):
    ```bash
    docker compose up --build
    ```
-4. Access the running service:
+3. Access the running service:
    - API base URL: `http://localhost:3000`
    - Swagger UI (when `SWAGGER_ENABLED=true`): `http://localhost:3000/api/docs`
    - Health probes: `GET /health`, `GET /health/liveness`, `GET /ready`, `GET /health/readiness`
@@ -46,16 +42,19 @@ A crash-safe **NestJS 12 (ESM) + PostgreSQL 18 + Drizzle ORM + RabbitMQ** modula
 | --- | --- | --- | --- |
 | `GET` | `/wallets/:userId` | Mandatory | Returns `IRT` & `USDT` `available`/`locked`/`receivable` (`"0"` if unseen) |
 | `GET` | `/wallets/:userId/ledger` | Mandatory | Keyset-paginated (`limit`, `cursor`, `accountType`, `currency`) |
-| `POST` | `/internal/adjustments` | Mandatory | Requires `Idempotency-Key`; optional `X-Internal-Api-Key` / IP allowlist (fail-closed in `production`) |
-| `POST` | `/deposits` | Mandatory | Requires `Idempotency-Key` (60s crash-recoverable lease); initiates PSP payment (`IRT * 10` IRR) |
+| `POST` | `/internal/adjustments` | Mandatory | User-scoped `Idempotency-Key`; protected by `InternalOpsGuard` (mandatory `X-Internal-Api-Key` in `production`) |
+| `POST` | `/internal/receivables/settle` | Ops Hardening | Settles `USER:RECEIVABLE` from `USER:AVAILABLE` via `RECEIVABLE_SETTLE` and unfreezes at zero; requires `Idempotency-Key` & `InternalOpsGuard` |
+| `POST` | `/internal/controls/withdrawals-pause` | Ops Hardening | Runtime emergency kill-switch (`currencies: ['IRT' \| 'USDT']`) stored in `system_controls`; requires `InternalOpsGuard` |
+| `GET` | `/internal/metrics` | Ops Hardening | Live counts for open discrepancies, `MANUAL_REVIEW`, pending outbox, paused currencies, and `balanceDriftAccounts`; requires `InternalOpsGuard` |
+| `POST` | `/deposits` | Mandatory | User-scoped `Idempotency-Key` (`lease_version`-fenced 60s lease); initiates PSP payment (`IRT * 10` IRR) |
 | `GET` | `/deposits/:id` | Mandatory | Returns deposit status (`INITIATED`, `AWAITING_PAYMENT`, `VERIFYING`, `SUCCEEDED`, `FAILED`) |
 | `POST` | `/webhooks/psp/callback` | Mandatory | Unsigned wake-up hint; triggers authoritative PSP status inquiry + verify |
-| `POST` | `/transfers` | Bonus | Atomic P2P transfer (`IRT` or `USDT`); requires `Idempotency-Key`; blocks `fromUserId === toUserId` |
-| `POST` | `/withdrawals` | Mandatory (`IRT`) / Bonus (`USDT`) | Validates IBAN (`IRT`) or TRC20 (`USDT`), minimum, daily quota, `outbound_frozen`; requires `Idempotency-Key` |
+| `POST` | `/transfers` | Bonus | Atomic P2P transfer (`IRT` or `USDT`); requires user-scoped `Idempotency-Key`; blocks `fromUserId === toUserId` |
+| `POST` | `/withdrawals` | Mandatory (`IRT`) / Bonus (`USDT`) | Validates IBAN (`IRT`) or TRC20 (`USDT`), minimum, pause kill-switch, daily quota, `outbound_frozen`; user-scoped `Idempotency-Key` |
 | `GET` | `/withdrawals/:id` | Mandatory | Returns withdrawal status (`PENDING_DISPATCH`, `DISPATCHING`, `PROCESSING`, `MANUAL_REVIEW`, `SUCCEEDED`, `FAILED`) |
-| `POST` | `/withdrawals/:id/cancel` | Bonus | Allowed strictly in `PENDING_DISPATCH`; releases `LOCKED -> AVAILABLE` and daily quota |
-| `POST` | `/webhooks/payout` | Mandatory | Constant-time raw-body HMAC-SHA256 verification (`x-signature`) |
-| `POST` | `/reconciliation/run` | Bonus | Read-only reconciliation of PSP CSV (`واریز درگاه`, Persian digits, `٬`, `000`-padded refs) |
+| `POST` | `/withdrawals/:id/cancel` | Bonus | Idempotent in `PENDING_DISPATCH` / already `CANCELLED_BY_USER`; releases `LOCKED -> AVAILABLE` and daily quota |
+| `POST` | `/webhooks/payout` | Mandatory | Constant-time raw-body HMAC-SHA256 verification (`x-signature`) + payload mismatch auditing |
+| `POST` | `/reconciliation/run` | Bonus | Protected by `InternalOpsGuard`; read-only reconciliation of PSP CSV (`واریز درگاه`, Persian digits, `٬`, `000`-padded refs) |
 
 Errors consistently follow `{"code": "...", "message": "..."}`.
 

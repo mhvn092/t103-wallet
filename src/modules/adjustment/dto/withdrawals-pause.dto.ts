@@ -38,3 +38,4 @@ export class WithdrawalsPauseResponseDto {
   @ApiProperty({ format: 'date-time' })
   updatedAt!: string;
 }
+

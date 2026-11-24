@@ -349,6 +349,235 @@
         ]
       }
     },
+    "/internal/receivables/settle": {
+      "post": {
+        "operationId": "InternalOpsController_settleReceivable",
+        "parameters": [
+          {
+            "name": "X-Internal-Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Operator-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceivableSettleDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Receivable balance settled cleanly via double-entry ledger",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceivableSettleResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business Rule Violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Settle outstanding USER:RECEIVABLE shortfall from USER:AVAILABLE and unfreeze when zero",
+        "tags": [
+          "Internal Operations"
+        ]
+      }
+    },
+    "/internal/controls/withdrawals-pause": {
+      "post": {
+        "operationId": "InternalOpsController_pauseWithdrawals",
+        "parameters": [
+          {
+            "name": "X-Internal-Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawalsPauseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated paused currencies list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalsPauseResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Pause or resume outbound withdrawals per currency at runtime",
+        "tags": [
+          "Internal Operations"
+        ]
+      }
+    },
+    "/internal/metrics": {
+      "get": {
+        "operationId": "InternalOpsController_getMetrics",
+        "parameters": [
+          {
+            "name": "X-Internal-Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current database-backed operational counters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalMetricsResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Operational metrics for discrepancies, manual-review backlog, outbox lag, and balance drift",
+        "tags": [
+          "Internal Operations"
+        ]
+      }
+    },
     "/deposits": {
       "post": {
         "operationId": "DepositController_initiate",
@@ -580,6 +809,16 @@
           },
           "422": {
             "description": "Business Rule Violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or External Provider Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -854,7 +1093,16 @@
     "/reconciliation/run": {
       "post": {
         "operationId": "ReconciliationController_run",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "X-Internal-Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -878,6 +1126,26 @@
           },
           "400": {
             "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
             "content": {
               "application/json": {
                 "schema": {
@@ -974,6 +1242,7 @@
               "NOT_FOUND",
               "INVALID_STATE_TRANSITION",
               "PROVIDER_UNAVAILABLE",
+              "SERVICE_PAUSED",
               "INTERNAL_ERROR"
             ],
             "example": "INVALID_REQUEST"
@@ -1209,6 +1478,164 @@
           "reason",
           "operatorId",
           "createdAt"
+        ]
+      },
+      "ReceivableSettleDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Optional positive settlement amount (defaults to min(available, receivable))",
+            "example": "150000"
+          }
+        },
+        "required": [
+          "userId",
+          "currency"
+        ]
+      },
+      "ReceivableSettleResponseDto": {
+        "type": "object",
+        "properties": {
+          "settlementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "example": "user_alice"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "IRT",
+              "USDT"
+            ],
+            "example": "IRT"
+          },
+          "settledAmount": {
+            "type": "string",
+            "example": "150000"
+          },
+          "remainingReceivable": {
+            "type": "string",
+            "example": "0"
+          },
+          "outboundFrozen": {
+            "type": "boolean",
+            "example": false
+          }
+        },
+        "required": [
+          "settlementId",
+          "userId",
+          "currency",
+          "settledAmount",
+          "remainingReceivable",
+          "outboundFrozen"
+        ]
+      },
+      "WithdrawalsPauseDto": {
+        "type": "object",
+        "properties": {
+          "currencies": {
+            "type": "array",
+            "example": [
+              "USDT"
+            ],
+            "description": "Currencies for which new outbound withdrawals are temporarily paused",
+            "items": {
+              "type": "string",
+              "enum": [
+                "IRT",
+                "USDT"
+              ]
+            }
+          },
+          "reason": {
+            "type": "string",
+            "example": "02:10 deployment incident containment"
+          }
+        },
+        "required": [
+          "currencies"
+        ]
+      },
+      "WithdrawalsPauseResponseDto": {
+        "type": "object",
+        "properties": {
+          "currencies": {
+            "type": "array",
+            "example": [
+              "USDT"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "IRT",
+                "USDT"
+              ]
+            }
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "currencies",
+          "updatedAt"
+        ]
+      },
+      "InternalMetricsResponseDto": {
+        "type": "object",
+        "properties": {
+          "openDiscrepancies": {
+            "type": "number",
+            "example": 0
+          },
+          "manualReviewWithdrawals": {
+            "type": "number",
+            "example": 0
+          },
+          "pendingOutboxEvents": {
+            "type": "number",
+            "example": 0
+          },
+          "balanceDriftAccounts": {
+            "type": "number",
+            "example": 0
+          },
+          "pausedWithdrawalCurrencies": {
+            "type": "array",
+            "example": [],
+            "items": {
+              "type": "string",
+              "enum": [
+                "IRT",
+                "USDT"
+              ]
+            }
+          }
+        },
+        "required": [
+          "openDiscrepancies",
+          "manualReviewWithdrawals",
+          "pendingOutboxEvents",
+          "balanceDriftAccounts",
+          "pausedWithdrawalCurrencies"
         ]
       },
       "DepositCreateDto": {
@@ -1530,6 +1957,14 @@
           "failureReason": {
             "type": "string",
             "example": "INVALID_IBAN"
+          },
+          "amount": {
+            "type": "object",
+            "example": "2500000"
+          },
+          "currency": {
+            "type": "string",
+            "example": "IRR"
           }
         },
         "required": [

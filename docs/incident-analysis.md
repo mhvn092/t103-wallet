@@ -32,5 +32,9 @@ $B < 0 \le L$ proves **asymmetric state mutation** between the mutable wallet ba
 
 Our design makes this entire class of failure **structurally impossible**:
 1. **Zero Redis in Critical Path:** No Redis distributed locks or cached balances exist; all concurrency serializes inside PostgreSQL via `SELECT ... FOR UPDATE` and Statement-#1 `idempotency_keys`.
-2. **Database-Materialized Balance ($B == L$ Enforced by Postgres):** `BEFORE UPDATE OF balance ON accounts` trigger guards (`pg_trigger_depth() <= 1` and session GUC `t103.allow_balance_update IS DISTINCT FROM 'on'`) **forbid direct SQL/ORM updates** to `accounts.balance`. Balances mutate *only* inside `BEFORE INSERT ON ledger_items` in the same ACID transaction as the balanced `ledger_transactions` commit.
+2. **Database-Materialized Balance ($B == L$ Enforced by Postgres):**
+   - `BEFORE UPDATE OF balance ON accounts` triggers (`pg_trigger_depth() <= 1` and session GUC `t103.allow_balance_update IS DISTINCT FROM 'on'`) **forbid direct SQL/ORM updates** to `accounts.balance`.
+   - `BEFORE INSERT OR UPDATE ON accounts` (`trg_accounts_immutable_meta`) rejects non-zero `USER` account inserts and blocks `normal_side` / ownership tampering, paired with `accounts_type_normal_side_chk` and `BEFORE TRUNCATE` triggers on `ledger_transactions` and `ledger_items`.
+   - Balances mutate *only* inside `BEFORE INSERT ON ledger_items` in the same ACID transaction as the balanced `ledger_transactions` commit.
 3. **Universal DB Floor:** `CHECK ((owner_type = 'SYSTEM' AND balance IS NULL) OR (owner_type = 'USER' AND balance >= 0))` rejects any transaction that would drive any `USER` account negative, even under application bugs or `N` autoscaled pods.
+4. **Safe `2 -> N` Replica Scale-Out, Containment & Live Drift Telemetry:** Startup migrations serialize on `pg_advisory_lock(840103)` so concurrent Kubernetes replicas never race on DDL; `POST /internal/controls/withdrawals-pause` pauses outbound `USDT` or `IRT` withdrawals at runtime without pod restarts; and `GET /internal/metrics` exposes live `balanceDriftAccounts`, `openDiscrepancies`, `manualReviewWithdrawals`, and `pendingOutboxEvents` counters.

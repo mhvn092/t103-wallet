@@ -3,15 +3,15 @@ services:
     image: postgres:18-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-t103}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-t103}
+      POSTGRES_DB: ${POSTGRES_DB:-t103_wallet}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-t103} -d ${POSTGRES_DB:-t103_wallet}"]
       interval: 3s
       timeout: 3s
       retries: 15
@@ -20,8 +20,8 @@ services:
     image: rabbitmq:4-management-alpine
     restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?Set RABBITMQ_DEFAULT_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-t103rmq}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-t103rmq}
     ports:
       - "${RABBITMQ_PORT:-5672}:5672"
       - "${RABBITMQ_MGMT_PORT:-15672}:15672"
@@ -41,7 +41,7 @@ services:
       SIM_TIME_SCALE: ${SIM_TIME_SCALE:-1}
       SIM_PUBLIC_URL: http://simulator:8080
       PAYOUT_WEBHOOK_URL: http://app:3000/webhooks/payout
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-hamtapay-sim-secret}
 
   app:
     build:
@@ -60,14 +60,15 @@ services:
       APP_ENV: ${APP_ENV:-local}
       SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
       PORT: 3000
-      DATABASE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      RABBITMQ_URI: amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672?heartbeat=60
+      DATABASE_URI: postgresql://${POSTGRES_USER:-t103}:${POSTGRES_PASSWORD:-t103}@postgres:5432/${POSTGRES_DB:-t103_wallet}
+      RABBITMQ_URI: amqp://${RABBITMQ_DEFAULT_USER:-t103rmq}:${RABBITMQ_DEFAULT_PASS:-t103rmq}@rabbitmq:5672?heartbeat=60
       PSP_BASE_URL: http://simulator:8080
       PAYOUT_BASE_URL: http://simulator:8080
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://app:3000}
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-hamtapay-sim-secret}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
       INTERNAL_ALLOWED_IPS: ${INTERNAL_ALLOWED_IPS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
       READINESS_DB_TIMEOUT_MS: ${READINESS_DB_TIMEOUT_MS:-2000}
       WD_MANUAL_REVIEW_SLA_MS: ${WD_MANUAL_REVIEW_SLA_MS:-1800000}
       MIN_WITHDRAWAL_IRT: ${MIN_WITHDRAWAL_IRT:-100000}
@@ -76,8 +77,11 @@ services:
       DAILY_LIMIT_IRT: ${DAILY_LIMIT_IRT:-200000000}
       USDT_IRT_RATE: ${USDT_IRT_RATE:-60000}
       DEPOSIT_TTL_SECONDS: ${DEPOSIT_TTL_SECONDS:-1800}
+      DEPOSIT_EXPIRY_GRACE_MS: ${DEPOSIT_EXPIRY_GRACE_MS:-900000}
+      RECONCILIATION_TZ: ${RECONCILIATION_TZ:-UTC}
       PROVIDER_HTTP_TIMEOUT_MS: ${PROVIDER_HTTP_TIMEOUT_MS:-10000}
       WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-1000}
+      RETENTION_CLEANUP_INTERVAL_MS: ${RETENTION_CLEANUP_INTERVAL_MS:-300000}
       WORKERS_ENABLED: ${WORKERS_ENABLED:-true}
 
 volumes:

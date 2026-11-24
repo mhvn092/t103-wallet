@@ -1,26 +1,24 @@
 import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
+import { Pool } from 'pg';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import { generateUuidV7 } from '../src/common/utils/uuidv7.js';
+import type { EnvConfig } from '../src/config/env.validation.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
-import { DepositService } from '../src/modules/deposit/deposit.service.js';
-import { AmqpBrokerClient } from '../src/modules/outbox/amqp-broker.client.js';
 import { BalanceEventConsumerService } from '../src/modules/outbox/balance-event-consumer.service.js';
-import { OutboxPublisherService } from '../src/modules/outbox/outbox-publisher.service.js';
-import { WithdrawalService } from '../src/modules/withdrawal/withdrawal.service.js';
 import {
   assertGlobalFinancialInvariants,
   fundUserViaAdjustment,
 } from './helpers/invariants.js';
 import {
   getRequiredTestDatabaseUri,
-  prepareTestEnv,
   resetTestDatabase,
 } from './helpers/test-env.js';
 
@@ -63,22 +61,21 @@ describe.runIf(IS_LIVE)(
   () => {
     let app: INestApplication<App>;
     let database: DatabaseService;
-    let depositService: DepositService;
-    let withdrawalService: WithdrawalService;
-    let outboxPublisher: OutboxPublisherService;
     let consumerService: BalanceEventConsumerService;
-    let brokerClient: AmqpBrokerClient;
     let pspBaseUrl: string;
 
     beforeAll(async () => {
-      prepareTestEnv();
       const port = Number(process.env.HOSTILE_TEST_APP_PORT ?? 3999);
-      process.env.APP_PUBLIC_URL = `http://host.docker.internal:${port}`;
-      process.env.WORKERS_ENABLED = 'false';
-      process.env.WD_MANUAL_REVIEW_SLA_MS = '8000';
 
       const dbUri = getRequiredTestDatabaseUri();
       await runMigrations(dbUri);
+
+      const initPool = new Pool({ connectionString: dbUri });
+      try {
+        await resetTestDatabase(initPool);
+      } finally {
+        await initPool.end();
+      }
 
       const moduleFixture: TestingModule = await Test.createTestingModule({
         imports: [AppModule],
@@ -88,15 +85,12 @@ describe.runIf(IS_LIVE)(
       configureApp(app);
       await app.listen(port, '0.0.0.0');
 
-      database = app.get(DatabaseService);
-      depositService = app.get(DepositService);
-      withdrawalService = app.get(WithdrawalService);
-      outboxPublisher = app.get(OutboxPublisherService);
-      consumerService = app.get(BalanceEventConsumerService);
-      brokerClient = app.get(AmqpBrokerClient);
-      pspBaseUrl = process.env.PSP_BASE_URL ?? 'http://127.0.0.1:8080';
+      const config = app.get(ConfigService<EnvConfig, true>);
+      expect(config.get('WORKERS_ENABLED', { infer: true })).toBe(true);
 
-      await resetTestDatabase(database.pool);
+      database = app.get(DatabaseService);
+      consumerService = app.get(BalanceEventConsumerService);
+      pspBaseUrl = process.env.PSP_BASE_URL ?? 'http://127.0.0.1:8080';
     });
 
     afterAll(async () => {
@@ -112,7 +106,7 @@ describe.runIf(IS_LIVE)(
         }
         await app.close();
       }
-    }, 20_000);
+    }, 25_000);
 
     async function createDepositWithRetry(
       userId: string,
@@ -138,11 +132,11 @@ describe.runIf(IS_LIVE)(
       throw new Error('Deposit initiation exhausted hostile retries');
     }
 
-    it('survives hostile PSP/Payout chaos, dirty settlement CSV, RabbitMQ delivery & dedup, and preserves all ledger invariants', async () => {
+    it('converges autonomously under hostile PSP/Payout chaos with WORKERS_ENABLED=true, dirty CSV reconciliation, RabbitMQ delivery, and zero SQL shortcuts', async () => {
       const userA = `hostile_a_${faker.string.alphanumeric(6)}`;
       const userB = `hostile_b_${faker.string.alphanumeric(6)}`;
 
-      // 1. Live hostile PSP deposits (3 paid, 1 failed, 1 unpaid)
+      // 1. Live hostile PSP deposits (3 paid, 1 failed, 1 unpaid) settled autonomously by DepositPoller
       const paidIds: string[] = [];
       for (let i = 0; i < 3; i += 1) {
         const dep = await createDepositWithRetry(
@@ -158,30 +152,30 @@ describe.runIf(IS_LIVE)(
 
       const unpaidDep = await createDepositWithRetry(userA, '160000');
 
-      const depositDeadline = Date.now() + 25_000;
+      const depositDeadline = Date.now() + 30_000;
       let allDepositsSettled = false;
       while (Date.now() < depositDeadline && !allDepositsSettled) {
-        await depositService.pollPendingDeposits(20);
-        for (const id of [...paidIds, failDep.depositId, unpaidDep.depositId]) {
-          await depositService.verifyDeposit(id).catch(() => undefined);
-        }
-        const paidStatuses = await Promise.all(
-          paidIds.map((id) => depositService.getDeposit(id)),
+        const paidResponses = await Promise.all(
+          paidIds.map((id) =>
+            request(app.getHttpServer()).get(`/deposits/${id}`).expect(200),
+          ),
         );
-        const failStatus = await depositService.getDeposit(failDep.depositId);
+        const failResponse = await request(app.getHttpServer())
+          .get(`/deposits/${failDep.depositId}`)
+          .expect(200);
         allDepositsSettled =
-          paidStatuses.every((s) => s.status === 'SUCCEEDED') &&
-          failStatus.status === 'FAILED';
+          paidResponses.every((r) => r.body.status === 'SUCCEEDED') &&
+          failResponse.body.status === 'FAILED';
         if (!allDepositsSettled) {
-          await sleep(250);
+          await sleep(400);
         }
       }
       expect(allDepositsSettled).toBe(true);
 
-      const failDetail = await depositService.getDeposit(failDep.depositId);
-      expect(failDetail.status).toBe('FAILED');
-      const unpaidDetail = await depositService.getDeposit(unpaidDep.depositId);
-      expect(unpaidDetail.status).not.toBe('SUCCEEDED');
+      const unpaidDetail = await request(app.getHttpServer())
+        .get(`/deposits/${unpaidDep.depositId}`)
+        .expect(200);
+      expect(unpaidDetail.body.status).not.toBe('SUCCEEDED');
 
       // 2. Atomic internal transfer & funding for withdrawals
       await request(app.getHttpServer())
@@ -210,7 +204,7 @@ describe.runIf(IS_LIVE)(
         idempotencyKey: `hostile-fund-usdt-${faker.string.uuid()}`,
       });
 
-      // 3. Live hostile IRT + USDT withdrawals
+      // 3. Live hostile IRT + USDT withdrawals converged autonomously by WithdrawalWorker (zero SQL lease overrides)
       const wdIds: string[] = [];
       for (let i = 0; i < 4; i += 1) {
         const res = await request(app.getHttpServer())
@@ -240,41 +234,26 @@ describe.runIf(IS_LIVE)(
         wdIds.push(res.body.withdrawalId as string);
       }
 
-      const wdDeadline = Date.now() + 25_000;
-      let nonConvergedWithdrawals = [] as Awaited<
-        ReturnType<typeof withdrawalService.getWithdrawal>
-      >[];
+      const wdDeadline = Date.now() + 45_000;
+      let nonConvergedCount = wdIds.length;
       while (Date.now() < wdDeadline) {
-        await database.pool.query(`
-          UPDATE withdrawals
-          SET lease_until = CASE
-            WHEN status = 'DISPATCHING' AND updated_at <= NOW() - INTERVAL '1 second'
-            THEN NOW() - INTERVAL '1 second'
-            ELSE lease_until
-          END,
-          next_poll_at = CASE
-            WHEN status IN ('PROCESSING', 'MANUAL_REVIEW')
-            THEN NOW() - INTERVAL '1 second'
-            ELSE next_poll_at
-          END
-        `);
-        await withdrawalService.dispatchPendingBatch(10);
-        await withdrawalService.pollProcessingBatch(10);
-        const details = await Promise.all(
-          wdIds.map((id) => withdrawalService.getWithdrawal(id)),
+        const responses = await Promise.all(
+          wdIds.map((id) =>
+            request(app.getHttpServer()).get(`/withdrawals/${id}`).expect(200),
+          ),
         );
-        nonConvergedWithdrawals = details.filter(
-          (d) =>
-            d.status !== 'SUCCEEDED' &&
-            d.status !== 'FAILED' &&
-            d.status !== 'MANUAL_REVIEW',
-        );
-        if (nonConvergedWithdrawals.length === 0) {
+        nonConvergedCount = responses.filter(
+          (r) =>
+            r.body.status !== 'SUCCEEDED' &&
+            r.body.status !== 'FAILED' &&
+            r.body.status !== 'MANUAL_REVIEW',
+        ).length;
+        if (nonConvergedCount === 0) {
           break;
         }
-        await sleep(300);
+        await sleep(500);
       }
-      expect(nonConvergedWithdrawals).toEqual([]);
+      expect(nonConvergedCount).toBe(0);
 
       // 4. Live dirty Persian settlement CSV reconciliation
       const utcDate = new Date().toISOString().slice(0, 10);
@@ -285,57 +264,56 @@ describe.runIf(IS_LIVE)(
       expect(recRes.body.date).toBe(utcDate);
       expect(Array.isArray(recRes.body.mismatches)).toBe(true);
 
-      // 5. Live RabbitMQ outbox flush & idempotent consumer consumption
-      for (let round = 0; round < 5; round += 1) {
-        const batch = await outboxPublisher.publishPendingBatch(100);
-        if (batch.published === 0 && batch.failed === 0) {
+      // 5. Autonomous OutboxWorker publishing to RabbitMQ + built-in consumer dedup verification
+      const outboxDeadline = Date.now() + 20_000;
+      let pendingOutboxCount = 1;
+      while (Date.now() < outboxDeadline) {
+        const { rows } = await database.pool.query<{ cnt: string }>(
+          `SELECT COUNT(*)::text AS cnt FROM outbox_events WHERE status != 'PUBLISHED'`,
+        );
+        pendingOutboxCount = Number(rows[0]?.cnt ?? 0);
+        if (pendingOutboxCount === 0) {
           break;
         }
-        await database.pool.query(
-          `UPDATE outbox_events SET next_retry_at = NOW() WHERE status = 'PENDING'`,
-        );
+        await sleep(400);
       }
+      expect(pendingOutboxCount).toBe(0);
 
-      const { rows: pendingOutbox } = await database.pool.query(
-        `SELECT id, status, retry_count, last_error FROM outbox_events WHERE status != 'PUBLISHED'`,
-      );
-      expect(pendingOutbox).toEqual([]);
-
-      await brokerClient.startConsumer(async ({ eventId, payload }) => {
-        await consumerService.processEvent({
-          eventId,
-          consumerName: 'hostile-e2e-consumer',
-          payload,
-        });
-      });
-
-      const consumeDeadline = Date.now() + 8_000;
+      const consumeDeadline = Date.now() + 10_000;
+      let consumedCount = 0;
       while (Date.now() < consumeDeadline) {
-        const { rows: countRows } = await database.pool.query<{ cnt: string }>(
-          `SELECT COUNT(*)::text AS cnt FROM processed_events WHERE consumer_name = 'hostile-e2e-consumer'`,
+        const { rows } = await database.pool.query<{ cnt: string }>(
+          `SELECT COUNT(*)::text AS cnt FROM processed_events WHERE consumer_name = 't103-balance-audit-consumer'`,
         );
-        if (Number(countRows[0]?.cnt ?? 0) > 0) {
+        consumedCount = Number(rows[0]?.cnt ?? 0);
+        if (consumedCount > 0) {
           break;
         }
-        await sleep(150);
+        await sleep(250);
       }
+      expect(consumedCount).toBeGreaterThan(0);
 
       const dupTestId = generateUuidV7();
       const firstApply = await consumerService.processEvent({
         eventId: dupTestId,
-        consumerName: 'hostile-e2e-consumer',
+        consumerName: 't103-balance-audit-consumer',
         payload: { check: true },
       });
       const dupApply = await consumerService.processEvent({
         eventId: dupTestId,
-        consumerName: 'hostile-e2e-consumer',
+        consumerName: 't103-balance-audit-consumer',
         payload: { check: true },
       });
       expect(firstApply).toEqual({ applied: true });
       expect(dupApply).toEqual({ applied: false });
 
-      // 6. Verify all financial invariants globally across DB
+      // 6. Verify all financial invariants globally & /internal/metrics reports 0 balance drift
+      const metricsRes = await request(app.getHttpServer())
+        .get('/internal/metrics')
+        .expect(200);
+      expect(metricsRes.body.balanceDriftAccounts).toBe(0);
+
       await assertGlobalFinancialInvariants(database.pool);
-    }, 95_000);
+    }, 120_000);
   },
 );

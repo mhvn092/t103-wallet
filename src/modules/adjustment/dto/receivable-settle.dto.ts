@@ -47,3 +47,4 @@ export class ReceivableSettleResponseDto {
   @ApiProperty({ example: false })
   outboundFrozen!: boolean;
 }
+

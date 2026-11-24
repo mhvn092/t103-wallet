@@ -17,3 +17,4 @@ export class InternalMetricsResponseDto {
   @ApiProperty({ enum: CURRENCIES, isArray: true, example: [] })
   pausedWithdrawalCurrencies!: Currency[];
 }
+
