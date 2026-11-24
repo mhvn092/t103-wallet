@@ -1,28 +1,22 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
 import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { TrimString } from '../../../common/decorators/trim-string.decorator.js';
+import { UserScopedDto } from '../../../common/dto/user-scoped.dto.js';
 import { CURRENCIES, type Currency } from '../../../common/utils/money.js';
 
-export class AdjustmentCreateDto {
-  @ApiProperty({ example: 'user_1' })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(128)
-  userId!: string;
-
+export class AdjustmentCreateDto extends UserScopedDto {
   @ApiProperty({ enum: CURRENCIES, example: 'IRT' })
   @IsIn(CURRENCIES)
   currency!: Currency;
 
   @ApiProperty({ example: '500000' })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @TrimString()
   @IsString()
   @IsNotEmpty()
   amount!: string;
 
   @ApiProperty({ example: 'deposit delay compensation' })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @TrimString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(500)
