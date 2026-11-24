@@ -36,6 +36,9 @@ export const idempotencyKeys = pgTable(
     responseStatus: integer('response_status'),
     responseBody: jsonb('response_body').$type<unknown>(),
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    leaseVersion: bigint('lease_version', { mode: 'bigint' })
+      .notNull()
+      .default(sql`1`),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -66,14 +69,15 @@ export const deposits = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     nextPollAt: timestamp('next_poll_at', { withTimezone: true }),
     verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    version: bigint('version', { mode: 'bigint' })
+      .notNull()
+      .default(sql`1`),
     ...auditTimestamps(),
   },
   (t) => [
     index('deposits_poll_idx')
       .on(t.nextPollAt)
-      .where(
-        sql`${t.status} IN ('INITIATED', 'AWAITING_PAYMENT', 'VERIFYING')`,
-      ),
+      .where(sql`${t.status} <> 'SUCCEEDED' AND ${t.nextPollAt} IS NOT NULL`),
     index('deposits_verified_at_idx')
       .on(t.verifiedAt)
       .where(sql`${t.status} = 'SUCCEEDED'`),
@@ -215,3 +219,11 @@ export const processedEvents = pgTable(
   },
   (t) => [primaryKey({ columns: [t.eventId, t.consumerName] })],
 );
+
+export const systemControls = pgTable('system_controls', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').$type<Record<string, unknown>>().notNull().default({}),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});

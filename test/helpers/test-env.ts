@@ -24,21 +24,44 @@ export function prepareTestEnv(): void {
 }
 
 export async function resetTestDatabase(pool: Pool): Promise<void> {
-  await pool.query(`
-    TRUNCATE TABLE
-      ledger_items,
-      ledger_transactions,
-      adjustments,
-      deposits,
-      withdrawals,
-      transfers,
-      financial_discrepancies,
-      outbox_events,
-      processed_events,
-      idempotency_keys,
-      user_daily_limits,
-      user_restrictions
-    CASCADE;
-    DELETE FROM accounts WHERE owner_type = 'USER';
-  `);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'ALTER TABLE ledger_items DISABLE TRIGGER trg_ledger_items_no_truncate',
+    );
+    await client.query(
+      'ALTER TABLE ledger_transactions DISABLE TRIGGER trg_ledger_transactions_no_truncate',
+    );
+    await client.query(`
+      TRUNCATE TABLE
+        ledger_items,
+        ledger_transactions,
+        adjustments,
+        deposits,
+        withdrawals,
+        transfers,
+        financial_discrepancies,
+        outbox_events,
+        processed_events,
+        idempotency_keys,
+        user_daily_limits,
+        user_restrictions,
+        system_controls
+      CASCADE
+    `);
+    await client.query(`DELETE FROM accounts WHERE owner_type = 'USER'`);
+    await client.query(
+      'ALTER TABLE ledger_items ENABLE TRIGGER trg_ledger_items_no_truncate',
+    );
+    await client.query(
+      'ALTER TABLE ledger_transactions ENABLE TRIGGER trg_ledger_transactions_no_truncate',
+    );
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }

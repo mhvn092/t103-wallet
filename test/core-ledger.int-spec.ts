@@ -42,9 +42,19 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
     await app?.close();
   });
 
-  it('rejects direct SQL updates to accounts.balance via pg_trigger_depth() trigger', async () => {
-    const accountId = generateUuidV7();
+  it('rejects direct SQL updates to accounts.balance, non-zero USER inserts, normal_side flips, TRUNCATE, and serializes concurrent migrations', async () => {
+    const rogueAccountId = generateUuidV7();
     const userId = `user_${faker.string.alphanumeric(8)}`;
+
+    await expect(
+      database.pool.query(
+        `INSERT INTO accounts (id, owner_type, owner_id, currency, account_type, normal_side, balance)
+         VALUES ($1, 'USER', $2, 'IRT', 'AVAILABLE', 'CREDIT', 999999999)`,
+        [rogueAccountId, userId],
+      ),
+    ).rejects.toThrow(/New USER accounts must start with balance = 0/);
+
+    const accountId = generateUuidV7();
     await database.pool.query(
       `INSERT INTO accounts (id, owner_type, owner_id, currency, account_type, normal_side, balance)
        VALUES ($1, 'USER', $2, 'IRT', 'AVAILABLE', 'CREDIT', 0)`,
@@ -57,6 +67,26 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
         [accountId],
       ),
     ).rejects.toThrow(/Direct updates to accounts\.balance are forbidden/);
+
+    await expect(
+      database.pool.query(
+        `UPDATE accounts SET normal_side = 'DEBIT' WHERE id = $1`,
+        [accountId],
+      ),
+    ).rejects.toThrow(/accounts_type_normal_side_chk|immutable/);
+
+    await expect(
+      database.pool.query(`TRUNCATE TABLE ledger_items`),
+    ).rejects.toThrow(/append-only/);
+
+    await expect(
+      database.pool.query(`TRUNCATE TABLE ledger_transactions CASCADE`),
+    ).rejects.toThrow(/append-only/);
+
+    const dbUri = getRequiredTestDatabaseUri();
+    await expect(
+      Promise.all(Array.from({ length: 6 }, () => runMigrations(dbUri))),
+    ).resolves.toHaveLength(6);
   });
 
   it('rejects unbalanced or cross-currency ledger transactions at COMMIT', async () => {
