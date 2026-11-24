@@ -43,6 +43,7 @@ export class WithdrawalController {
     HttpStatus.FORBIDDEN,
     HttpStatus.CONFLICT,
     HttpStatus.UNPROCESSABLE_ENTITY,
+    HttpStatus.SERVICE_UNAVAILABLE,
   )
   async create(
     @RequireIdempotencyKey() idempotencyKey: string,

@@ -9,6 +9,7 @@ export type LedgerTxType =
   | 'WD_RETURN'
   | 'WD_LATE_SUCCESS'
   | 'OPS_ADJ'
+  | 'RECEIVABLE_SETTLE'
   | 'TRANSFER';
 
 export type LedgerRefType =

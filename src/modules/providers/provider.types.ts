@@ -6,11 +6,17 @@ export type PspPaymentStatusResult =
       status: PspStatusValue;
       amountIrt: bigint | null;
       refId: string | null;
+      orderId?: string | null;
     }
   | { kind: 'AMBIGUOUS'; reason: string };
 
 export type PspVerifyResult =
-  | { kind: 'VERIFIED'; amountIrt: bigint; refId: string | null }
+  | {
+      kind: 'VERIFIED';
+      amountIrt: bigint;
+      refId: string | null;
+      hasIrrRemainder?: boolean;
+    }
   | { kind: 'FAILED'; reason: string }
   | { kind: 'RETRYABLE_ERROR'; reason: string };
 

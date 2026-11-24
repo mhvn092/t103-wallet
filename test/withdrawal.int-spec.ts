@@ -619,4 +619,308 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
 
     await assertGlobalFinancialInvariants(database.pool);
   });
+
+  it('prevents duplicate or late SUCCEEDED webhook from confiscating funds after RETURNED or idempotent CANCELLED_BY_USER (F-01, F-14)', async () => {
+    const userId = `user_${faker.string.alphanumeric(8)}`;
+    await fundUserViaAdjustment({
+      app,
+      userId,
+      currency: 'IRT',
+      amount: '250000',
+      idempotencyKey: `fund-f01-${faker.string.uuid()}`,
+    });
+
+    // 1. Cancel withdrawal twice -> idempotent 200 OK + late SUCCEEDED webhook is ignored
+    const cancelWdRes = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-f01-cancel-${faker.string.uuid()}`)
+      .send({
+        userId,
+        currency: 'IRT',
+        amount: '100000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+    const cancelId = cancelWdRes.body.withdrawalId as string;
+    const cancelReqId = cancelWdRes.body.providerRequestId as string;
+
+    const cancel1 = await request(app.getHttpServer())
+      .post(`/withdrawals/${cancelId}/cancel`)
+      .expect(200);
+    const cancel2 = await request(app.getHttpServer())
+      .post(`/withdrawals/${cancelId}/cancel`)
+      .expect(200);
+    expect(cancel1.body.status).toBe('FAILED');
+    expect(cancel2.body.status).toBe('FAILED');
+
+    const rawAfterCancel = JSON.stringify({
+      requestId: cancelReqId,
+      status: 'SUCCEEDED',
+      refId: 'REF-IGNORED-AFTER-CANCEL',
+    });
+    const afterCancelAck = await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', signPayoutPayload(rawAfterCancel, webhookSecret))
+      .send(rawAfterCancel)
+      .expect(200);
+    expect(afterCancelAck.body.status).toBe('FAILED');
+
+    // 2. Normal withdrawal SUCCEEDED -> RETURNED -> duplicate SUCCEEDED must NOT debit user again
+    const wdRes = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-f01-ret-${faker.string.uuid()}`)
+      .send({
+        userId,
+        currency: 'IRT',
+        amount: '100000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+    const wdReqId = wdRes.body.providerRequestId as string;
+
+    mockPayoutClient.createTransfer.mockResolvedValueOnce({
+      kind: 'ACCEPTED',
+      trackingId: 'TRK-F01',
+    });
+    await withdrawalService.dispatchPendingBatch();
+
+    const rawSucceeded = JSON.stringify({
+      requestId: wdReqId,
+      status: 'SUCCEEDED',
+      refId: 'REF-F01-1',
+    });
+    const sigSucceeded = signPayoutPayload(rawSucceeded, webhookSecret);
+    await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', sigSucceeded)
+      .send(rawSucceeded)
+      .expect(200);
+
+    const rawReturned = JSON.stringify({
+      requestId: wdReqId,
+      status: 'RETURNED',
+      reason: 'CLOSED_ACCOUNT',
+    });
+    await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', signPayoutPayload(rawReturned, webhookSecret))
+      .send(rawReturned)
+      .expect(200);
+
+    // Duplicate/reordered SUCCEEDED arrives after bank RETURNED
+    const dupSucceeded = await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', sigSucceeded)
+      .send(rawSucceeded)
+      .expect(200);
+    expect(dupSucceeded.body.status).toBe('FAILED');
+
+    const walletRes = await request(app.getHttpServer())
+      .get(`/wallets/${userId}`)
+      .expect(200);
+    expect(walletRes.body.balances[0]).toEqual({
+      currency: 'IRT',
+      available: '250000',
+      locked: '0',
+      receivable: '0',
+    });
+
+    const { rows: lateRows } = await database.pool.query(
+      `SELECT id FROM ledger_transactions WHERE type = 'WD_LATE_SUCCESS'`,
+    );
+    expect(lateRows).toHaveLength(0);
+    await assertGlobalFinancialInvariants(database.pool);
+  });
+
+  it('offsets USER:RECEIVABLE before USER:AVAILABLE on RETURNED after WD_LATE_SUCCESS and lifts freeze cleanly (F-02, F-07)', async () => {
+    const user1 = `u1_${faker.string.alphanumeric(6)}`;
+    const user2 = `u2_${faker.string.alphanumeric(6)}`;
+    await fundUserViaAdjustment({
+      app,
+      userId: user1,
+      currency: 'IRT',
+      amount: '100000',
+      idempotencyKey: `fund-f02-${faker.string.uuid()}`,
+    });
+
+    const wdRes = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-f02-${faker.string.uuid()}`)
+      .send({
+        userId: user1,
+        currency: 'IRT',
+        amount: '100000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+    const wdId = wdRes.body.withdrawalId as string;
+    const reqId = wdRes.body.providerRequestId as string;
+
+    // Remove unused 0-balance RECEIVABLE row to verify F-07 webhook pre-scaffolding recovery
+    await database.pool.query(
+      `DELETE FROM accounts WHERE owner_type = 'USER' AND owner_id = $1 AND account_type = 'RECEIVABLE'`,
+      [user1],
+    );
+
+    mockPayoutClient.createTransfer.mockResolvedValueOnce({
+      kind: 'PERMANENT_REJECTED',
+      reason: 'TEMP_GATEWAY_REJECT',
+    });
+    await withdrawalService.dispatchPendingBatch();
+
+    // Transfer out 100,000 to user2 -> user1 available = 0
+    await request(app.getHttpServer())
+      .post('/transfers')
+      .set('Idempotency-Key', `xfer-f02-${faker.string.uuid()}`)
+      .send({
+        fromUserId: user1,
+        toUserId: user2,
+        currency: 'IRT',
+        amount: '100000',
+      })
+      .expect(201);
+
+    // Late SUCCEEDED arrives -> user1.receivable = 100,000, outbound_frozen = true
+    const rawLateOk = JSON.stringify({
+      requestId: reqId,
+      status: 'SUCCEEDED',
+      refId: 'REF-F02-LATE',
+    });
+    await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', signPayoutPayload(rawLateOk, webhookSecret))
+      .send(rawLateOk)
+      .expect(200);
+
+    // Bank subsequently returns the payout -> must extinguish RECEIVABLE first and unfreeze user1!
+    const rawReturn = JSON.stringify({
+      requestId: reqId,
+      status: 'RETURNED',
+      reason: 'BANK_RETURNED_AFTER_LATE_OK',
+    });
+    const retRes = await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', signPayoutPayload(rawReturn, webhookSecret))
+      .send(rawReturn)
+      .expect(200);
+    expect(retRes.body.status).toBe('FAILED');
+    expect(retRes.body.withdrawalId).toBe(wdId);
+
+    const u1Wallet = await request(app.getHttpServer())
+      .get(`/wallets/${user1}`)
+      .expect(200);
+    expect(u1Wallet.body.balances[0]).toEqual({
+      currency: 'IRT',
+      available: '0',
+      locked: '0',
+      receivable: '0',
+    });
+
+    const u2Wallet = await request(app.getHttpServer())
+      .get(`/wallets/${user2}`)
+      .expect(200);
+    expect(u2Wallet.body.balances[0].available).toBe('100000');
+
+    const { rows: restRows } = await database.pool.query<{
+      outbound_frozen: boolean;
+    }>(`SELECT outbound_frozen FROM user_restrictions WHERE user_id = $1`, [
+      user1,
+    ]);
+    expect(restRows[0]?.outbound_frozen).toBe(false);
+
+    // Total user AVAILABLE balance equals net external deposit (100,000) with zero inflation
+    const { rows: totalRows } = await database.pool.query<{ total: string }>(
+      `SELECT SUM(balance)::text AS total FROM accounts WHERE owner_type = 'USER' AND account_type = 'AVAILABLE' AND currency = 'IRT'`,
+    );
+    expect(totalRows[0]?.total).toBe('100000');
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
+
+  it('uses short jittered backoff on initial 503 dispatch, escalates stalled DISPATCHING past SLA, and flags webhook payload mismatch (F-11, F-12)', async () => {
+    const userId = `user_${faker.string.alphanumeric(8)}`;
+    await fundUserViaAdjustment({
+      app,
+      userId,
+      currency: 'IRT',
+      amount: '400000',
+      idempotencyKey: `fund-f11-${faker.string.uuid()}`,
+    });
+
+    const wdRes = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', `wd-f11-${faker.string.uuid()}`)
+      .send({
+        userId,
+        currency: 'IRT',
+        amount: '150000',
+        destination: VALID_IBAN,
+      })
+      .expect(201);
+    const wdId = wdRes.body.withdrawalId as string;
+    const reqId = wdRes.body.providerRequestId as string;
+
+    mockPayoutClient.createTransfer.mockResolvedValueOnce({
+      kind: 'AMBIGUOUS',
+      reason: 'HTTP 503',
+    });
+    const beforeMs = Date.now();
+    await withdrawalService.dispatchPendingBatch();
+
+    const { rows: leaseRows } = await database.pool.query<{
+      status: string;
+      lease_until: Date;
+    }>(`SELECT status, lease_until FROM withdrawals WHERE id = $1`, [wdId]);
+    expect(leaseRows[0]?.status).toBe('DISPATCHING');
+    const leaseDeltaMs = leaseRows[0]!.lease_until.getTime() - beforeMs;
+    expect(leaseDeltaMs).toBeGreaterThan(500);
+    expect(leaseDeltaMs).toBeLessThan(10_000);
+
+    // Age DISPATCHING row past SLA and force another ambiguous recovery inquiry -> must escalate to MANUAL_REVIEW
+    await database.pool.query(
+      `UPDATE withdrawals SET created_at = NOW() - INTERVAL '2 hours', lease_until = NOW() - INTERVAL '1 second' WHERE id = $1`,
+      [wdId],
+    );
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'AMBIGUOUS',
+      reason: 'Payout still timing out',
+    });
+    await withdrawalService.dispatchPendingBatch();
+
+    const escalated = await request(app.getHttpServer())
+      .get(`/withdrawals/${wdId}`)
+      .expect(200);
+    expect(escalated.body.status).toBe('MANUAL_REVIEW');
+
+    // Signed webhook with mismatched amount (9,990,000 IRR instead of 1,500,000 IRR) flags discrepancy
+    const rawMismatch = JSON.stringify({
+      requestId: reqId,
+      status: 'SUCCEEDED',
+      amount: 9_990_000,
+      currency: 'IRR',
+      refId: 'REF-MISMATCH-WH',
+    });
+    await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', signPayoutPayload(rawMismatch, webhookSecret))
+      .send(rawMismatch)
+      .expect(200);
+
+    const { rows: discRows } = await database.pool.query<{
+      discrepancy_type: string;
+    }>(
+      `SELECT discrepancy_type FROM financial_discrepancies WHERE reference_id = $1`,
+      [wdId],
+    );
+    expect(discRows).toEqual([{ discrepancy_type: 'PAYOUT_PAYLOAD_MISMATCH' }]);
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
 });

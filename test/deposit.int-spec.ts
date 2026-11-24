@@ -397,4 +397,178 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
 
     await assertGlobalFinancialInvariants(database.pool);
   });
+
+  it('prevents stale INIT check past expires_at from clobbering VERIFYING and recovers expired deposits in grace window (F-03)', async () => {
+    const userId = `user_${faker.string.alphanumeric(8)}`;
+    const tokenRace = `tok_race_${faker.string.alphanumeric(8)}`;
+
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token: tokenRace,
+      paymentUrl: `http://psp.local/pay/${tokenRace}`,
+      expiresAt: new Date(Date.now() + 300_000),
+    });
+    const raceDepRes = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', `dep-f03-race-${faker.string.uuid()}`)
+      .send({ userId, amount: '45000' })
+      .expect(201);
+    const raceId = raceDepRes.body.depositId as string;
+
+    let markInitEntered!: () => void;
+    const initEntered = new Promise<void>((resolve) => {
+      markInitEntered = resolve;
+    });
+    let releaseInitRead!: () => void;
+    const initBarrier = new Promise<void>((resolve) => {
+      releaseInitRead = resolve;
+    });
+
+    mockPspClient.getPaymentStatus.mockImplementationOnce(async () => {
+      markInitEntered();
+      await initBarrier;
+      return {
+        kind: 'FOUND',
+        status: 'INIT',
+        amountIrt: 45_000n,
+        refId: null,
+      };
+    });
+
+    const staleWorkerPromise = depositService.verifyDeposit(raceId);
+    await initEntered;
+
+    // Expire deposit and let Worker B observe PAID + transient 503 -> moves AWAITING_PAYMENT -> VERIFYING (v+1)
+    await database.pool.query(
+      `UPDATE deposits SET expires_at = NOW() - INTERVAL '5 seconds' WHERE id = $1`,
+      [raceId],
+    );
+    mockPspClient.getPaymentStatus.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'PAID',
+      amountIrt: 45_000n,
+      refId: null,
+    });
+    mockPspClient.verifyPayment.mockResolvedValueOnce({
+      kind: 'RETRYABLE_ERROR',
+      reason: 'HTTP 503',
+    });
+    const verifyingView = await depositService.verifyDeposit(raceId);
+    expect(verifyingView.status).toBe('VERIFYING');
+
+    // Now Worker A completes stale INIT past expires_at -> version CAS must protect VERIFYING
+    releaseInitRead();
+    await staleWorkerPromise;
+
+    const afterRace = await depositService.getDeposit(raceId);
+    expect(afterRace.status).toBe('VERIFYING');
+
+    // Post-expiry grace poll: expired deposit marked FAILED keeps non-null next_poll_at and settles PAID -> SUCCEEDED
+    const tokenGrace = `tok_grace_${faker.string.alphanumeric(8)}`;
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token: tokenGrace,
+      paymentUrl: `http://psp.local/pay/${tokenGrace}`,
+      expiresAt: new Date(Date.now() - 5_000),
+    });
+    const graceDepRes = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', `dep-f03-grace-${faker.string.uuid()}`)
+      .send({ userId, amount: '55000' })
+      .expect(201);
+    const graceId = graceDepRes.body.depositId as string;
+
+    mockPspClient.getPaymentStatus.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'INIT',
+      amountIrt: 55_000n,
+      refId: null,
+    });
+    const expiredGraceState = await depositService.verifyDeposit(graceId);
+    expect(expiredGraceState.status).toBe('FAILED');
+
+    const { rows: gracePollRows } = await database.pool.query<{
+      next_poll_at: Date | null;
+    }>(`SELECT next_poll_at FROM deposits WHERE id = $1`, [graceId]);
+    expect(gracePollRows[0]?.next_poll_at).not.toBeNull();
+
+    await database.pool.query(
+      `UPDATE deposits SET next_poll_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
+      [graceId],
+    );
+    mockPspClient.getPaymentStatus.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'PAID',
+      amountIrt: 55_000n,
+      refId: 'REF-GRACE',
+    });
+    mockPspClient.verifyPayment.mockResolvedValueOnce({
+      kind: 'VERIFIED',
+      amountIrt: 55_000n,
+      refId: 'REF-GRACE',
+    });
+
+    const polled = await depositService.pollPendingDeposits(10);
+    expect(polled).toBeGreaterThanOrEqual(1);
+    const settledGrace = await depositService.getDeposit(graceId);
+    expect(settledGrace.status).toBe('SUCCEEDED');
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
+
+  it('logs ORDER_ID_MISMATCH without crediting and flags hasIrrRemainder truncation as AMOUNT_MISMATCH (F-12)', async () => {
+    const userId = `user_${faker.string.alphanumeric(8)}`;
+    const token = `tok_f12_${faker.string.alphanumeric(8)}`;
+
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token,
+      paymentUrl: `http://psp.local/pay/${token}`,
+      expiresAt: new Date(Date.now() + 300_000),
+    });
+    const depRes = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', `dep-f12-${faker.string.uuid()}`)
+      .send({ userId, amount: '50000' })
+      .expect(201);
+    const depositId = depRes.body.depositId as string;
+
+    mockPspClient.getPaymentStatus.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'PAID',
+      amountIrt: 50_000n,
+      refId: 'REF-BAD-ORD',
+      orderId: 'dep_wrong_order',
+    });
+    await depositService.verifyDeposit(depositId);
+    expect(mockPspClient.verifyPayment).not.toHaveBeenCalled();
+
+    // Next attempt returns matching orderId and hasIrrRemainder: true -> logs AMOUNT_MISMATCH even if IRT integer matches
+    mockPspClient.getPaymentStatus.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'PAID',
+      amountIrt: 50_000n,
+      refId: 'REF-REM',
+      orderId: `dep_${depositId}`,
+    });
+    mockPspClient.verifyPayment.mockResolvedValueOnce({
+      kind: 'VERIFIED',
+      amountIrt: 50_000n,
+      refId: 'REF-REM',
+      hasIrrRemainder: true,
+    });
+    const settled = await depositService.verifyDeposit(depositId);
+    expect(settled.status).toBe('SUCCEEDED');
+    expect(settled.amountMismatch).toBe(true);
+
+    const { rows: discRows } = await database.pool.query<{
+      discrepancy_type: string;
+    }>(
+      `SELECT discrepancy_type FROM financial_discrepancies WHERE reference_id = $1 ORDER BY created_at ASC`,
+      [depositId],
+    );
+    expect(discRows).toEqual([
+      { discrepancy_type: 'ORDER_ID_MISMATCH' },
+      { discrepancy_type: 'AMOUNT_MISMATCH' },
+    ]);
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
 });

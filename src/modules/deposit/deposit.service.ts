@@ -1,9 +1,10 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, asc, eq, inArray, lte, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, lte, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
+import { addJitterMs } from '../../common/utils/backoff.js';
 import { parseAmountToMinor } from '../../common/utils/money.js';
 import { assertValidUuid } from '../../common/utils/uuid-validation.js';
 import { generateUuidV7 } from '../../common/utils/uuidv7.js';
@@ -96,7 +97,7 @@ export class DepositService {
       );
 
       const pspPayment = await this._createPspPaymentOrRelease(
-        depositId,
+        created,
         amountMinor,
         orderId,
         scope,
@@ -192,7 +193,11 @@ export class DepositService {
 
     const inquiry = await this._pspClient.getPaymentStatus(row.pspToken);
     if (inquiry.kind === 'AMBIGUOUS') {
-      return this._reschedulePoll(row.id, row.status);
+      return this._reschedulePoll(row, row.status);
+    }
+
+    if (inquiry.orderId && inquiry.orderId !== row.orderId) {
+      return this._recordOrderIdMismatchAndReschedule(row, inquiry.orderId);
     }
 
     if (inquiry.status === 'INIT') {
@@ -200,22 +205,23 @@ export class DepositService {
     }
 
     if (inquiry.status === 'FAILED' || inquiry.status === 'EXPIRED') {
-      return this._markDepositFailedIfUnsettled(row.id);
+      return this._markDepositFailedIfUnsettled(row, null);
     }
 
     const verifyResult = await this._pspClient.verifyPayment(row.pspToken);
     if (verifyResult.kind === 'RETRYABLE_ERROR') {
       const nextStatus = row.status === 'FAILED' ? 'FAILED' : 'VERIFYING';
-      return this._reschedulePoll(row.id, nextStatus);
+      return this._reschedulePoll(row, nextStatus);
     }
 
     if (verifyResult.kind === 'FAILED') {
-      return this._markDepositFailedIfUnsettled(row.id);
+      return this._markDepositFailedIfUnsettled(row, null);
     }
 
     return this._settleVerifiedDeposit({
       depositId: row.id,
       verifiedAmountIrt: verifyResult.amountIrt,
+      hasIrrRemainder: Boolean(verifyResult.hasIrrRemainder),
       pspRefId: verifyResult.refId ?? inquiry.refId,
     });
   }
@@ -227,14 +233,7 @@ export class DepositService {
         .select({ id: deposits.id })
         .from(deposits)
         .where(
-          and(
-            inArray(deposits.status, [
-              'INITIATED',
-              'AWAITING_PAYMENT',
-              'VERIFYING',
-            ]),
-            lte(deposits.nextPollAt, now),
-          ),
+          and(ne(deposits.status, 'SUCCEEDED'), lte(deposits.nextPollAt, now)),
         )
         .orderBy(asc(deposits.nextPollAt))
         .limit(limit)
@@ -248,7 +247,9 @@ export class DepositService {
       await tx
         .update(deposits)
         .set({
-          nextPollAt: new Date(now.getTime() + POLL_CLAIM_LEASE_MS),
+          nextPollAt: new Date(
+            now.getTime() + addJitterMs(POLL_CLAIM_LEASE_MS),
+          ),
           updatedAt: now,
         })
         .where(inArray(deposits.id, ids));
@@ -301,7 +302,7 @@ export class DepositService {
   }
 
   private async _createPspPaymentOrRelease(
-    depositId: string,
+    deposit: DepositRow,
     amountMinor: bigint,
     orderId: string,
     scope: string,
@@ -324,7 +325,7 @@ export class DepositService {
       });
       return { ok: true, value };
     } catch (error) {
-      await this._markDepositFailedIfUnsettled(depositId).catch(
+      await this._markDepositFailedIfUnsettled(deposit, null).catch(
         () => undefined,
       );
       await this._idempotency
@@ -358,10 +359,16 @@ export class DepositService {
           pspToken: params.pspPayment.token,
           paymentUrl: params.pspPayment.paymentUrl,
           expiresAt: params.pspPayment.expiresAt,
-          nextPollAt: new Date(now.getTime() + POLL_BACKOFF_MS),
+          nextPollAt: new Date(now.getTime() + addJitterMs(POLL_BACKOFF_MS)),
+          version: sql`${deposits.version} + 1`,
           updatedAt: now,
         })
-        .where(eq(deposits.id, params.depositId));
+        .where(
+          and(
+            eq(deposits.id, params.depositId),
+            eq(deposits.status, 'INITIATED'),
+          ),
+        );
 
       await this._idempotency.completeLeased({
         scope: params.scope,
@@ -416,7 +423,7 @@ export class DepositService {
   ): Promise<DepositDetailResponseDto> {
     const ageMs = Date.now() - row.createdAt.getTime();
     if (row.status === 'INITIATED' && ageMs >= ORPHAN_INITIATED_AGE_MS) {
-      return this._markDepositFailedIfUnsettled(row.id);
+      return this._markDepositFailedIfUnsettled(row, null);
     }
     return this._toDetailDto(row);
   }
@@ -424,35 +431,90 @@ export class DepositService {
   private async _handleInitStatus(
     row: DepositRow,
   ): Promise<DepositDetailResponseDto> {
-    if (row.expiresAt && Date.now() >= row.expiresAt.getTime()) {
-      return this._markDepositFailedIfUnsettled(row.id);
+    const nowMs = Date.now();
+    if (row.expiresAt && nowMs >= row.expiresAt.getTime()) {
+      const gracePollAt = this._computePostExpiryGracePollAt(
+        row.expiresAt,
+        nowMs,
+      );
+      return this._markDepositFailedIfUnsettled(row, gracePollAt);
     }
     const targetStatus =
       row.status === 'FAILED' ? 'FAILED' : 'AWAITING_PAYMENT';
-    return this._reschedulePoll(row.id, targetStatus);
+    return this._reschedulePoll(row, targetStatus);
+  }
+
+  private _computePostExpiryGracePollAt(
+    expiresAt: Date,
+    nowMs: number,
+  ): Date | null {
+    const graceMs = this._config.get('DEPOSIT_EXPIRY_GRACE_MS', {
+      infer: true,
+    });
+    if (graceMs <= 0) {
+      return null;
+    }
+    const graceDeadlineMs = expiresAt.getTime() + graceMs;
+    if (nowMs >= graceDeadlineMs) {
+      return null;
+    }
+    const elapsedMs = nowMs - expiresAt.getTime();
+    let stepBaseMs = 300_000;
+    if (elapsedMs < 120_000) {
+      stepBaseMs = 30_000;
+    } else if (elapsedMs < 300_000) {
+      stepBaseMs = 120_000;
+    }
+    return new Date(Math.min(graceDeadlineMs, nowMs + addJitterMs(stepBaseMs)));
+  }
+
+  private async _recordOrderIdMismatchAndReschedule(
+    row: DepositRow,
+    actualOrderId: string,
+  ): Promise<DepositDetailResponseDto> {
+    this._logger.error(
+      `PSP orderId mismatch on deposit=${row.id}: expected=${row.orderId} actual=${actualOrderId}`,
+    );
+    await this._database.db.insert(financialDiscrepancies).values({
+      id: generateUuidV7(),
+      referenceType: 'DEPOSIT',
+      referenceId: row.id,
+      userId: row.userId,
+      discrepancyType: 'ORDER_ID_MISMATCH',
+      amount: row.requestedAmount,
+      currency: 'IRT',
+      providerPayload: {
+        expectedOrderId: row.orderId,
+        actualOrderId,
+        pspToken: row.pspToken,
+      },
+      status: 'OPEN',
+    });
+    return this._reschedulePoll(row, row.status);
   }
 
   private async _reschedulePoll(
-    depositId: string,
+    row: DepositRow,
     targetStatus: string,
   ): Promise<DepositDetailResponseDto> {
-    return this._updateUnsettledDeposit(depositId, {
+    return this._updateUnsettledDeposit(row, {
       status: targetStatus,
-      nextPollAt: new Date(Date.now() + POLL_BACKOFF_MS),
+      nextPollAt: new Date(Date.now() + addJitterMs(POLL_BACKOFF_MS)),
     });
   }
 
   private async _markDepositFailedIfUnsettled(
-    depositId: string,
+    row: DepositRow,
+    nextPollAt: Date | null,
   ): Promise<DepositDetailResponseDto> {
-    return this._updateUnsettledDeposit(depositId, {
+    return this._updateUnsettledDeposit(row, {
       status: 'FAILED',
-      nextPollAt: null,
+      nextPollAt,
     });
   }
 
   private async _updateUnsettledDeposit(
-    depositId: string,
+    row: DepositRow,
     patch: { status: string; nextPollAt: Date | null },
   ): Promise<DepositDetailResponseDto> {
     const now = new Date();
@@ -461,12 +523,20 @@ export class DepositService {
       .set({
         status: patch.status,
         nextPollAt: patch.nextPollAt,
+        version: sql`${deposits.version} + 1`,
         updatedAt: now,
       })
-      .where(and(eq(deposits.id, depositId), ne(deposits.status, 'SUCCEEDED')))
+      .where(
+        and(
+          eq(deposits.id, row.id),
+          eq(deposits.status, row.status),
+          eq(deposits.version, row.version),
+          ne(deposits.status, 'SUCCEEDED'),
+        ),
+      )
       .returning();
 
-    const current = updated ?? (await this._requireDeposit(depositId));
+    const current = updated ?? (await this._requireDeposit(row.id));
     return this._toDetailDto(current);
   }
 
@@ -485,6 +555,7 @@ export class DepositService {
   private async _settleVerifiedDeposit(params: {
     depositId: string;
     verifiedAmountIrt: bigint;
+    hasIrrRemainder: boolean;
     pspRefId: string | null;
   }): Promise<DepositDetailResponseDto> {
     const preRead = await this._requireDeposit(params.depositId);
@@ -561,7 +632,8 @@ export class DepositService {
       });
 
       const requestedAmount = BigInt(locked.requestedAmount);
-      const amountMismatch = params.verifiedAmountIrt !== requestedAmount;
+      const amountMismatch =
+        params.verifiedAmountIrt !== requestedAmount || params.hasIrrRemainder;
       const now = new Date();
 
       const [updated] = await tx
@@ -573,6 +645,7 @@ export class DepositService {
           pspRefId: params.pspRefId,
           verifiedAt: now,
           nextPollAt: null,
+          version: sql`${deposits.version} + 1`,
           updatedAt: now,
         })
         .where(eq(deposits.id, locked.id))
@@ -590,6 +663,7 @@ export class DepositService {
           providerPayload: {
             requestedAmount: locked.requestedAmount,
             verifiedAmount: params.verifiedAmountIrt.toString(),
+            hasIrrRemainder: params.hasIrrRemainder,
             pspToken: locked.pspToken,
             pspRefId: params.pspRefId,
           },

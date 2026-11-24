@@ -28,4 +28,10 @@ export class WithdrawalPayoutWebhookDto {
 
   @ApiPropertyOptional({ example: 'INVALID_IBAN' })
   failureReason?: string;
+
+  @ApiPropertyOptional({ example: '2500000' })
+  amount?: string | number;
+
+  @ApiPropertyOptional({ example: 'IRR' })
+  currency?: string;
 }

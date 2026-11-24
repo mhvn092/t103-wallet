@@ -24,6 +24,7 @@ const paymentStatusSchema = z.object({
   status: z.enum(['INIT', 'PAID', 'VERIFIED', 'FAILED', 'EXPIRED']),
   amount: z.union([z.string(), z.number()]).nullish(),
   refId: z.string().nullish(),
+  orderId: z.string().nullish(),
 });
 
 const verifyResponseSchema = z.object({
@@ -143,6 +144,7 @@ export class PspClient {
       status: parsed.data.status,
       amountIrt: converted ? converted.amountIrt : null,
       refId: parsed.data.refId ?? null,
+      orderId: parsed.data.orderId ?? null,
     };
   }
 
@@ -194,6 +196,7 @@ export class PspClient {
         kind: 'VERIFIED',
         amountIrt: converted.amountIrt,
         refId: refId ?? null,
+        hasIrrRemainder: converted.hasRemainder,
       };
     }
 

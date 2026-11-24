@@ -73,6 +73,37 @@ export const envSchema = z.object({
     .regex(/^[1-9]\d*$/)
     .default('60000'),
   DEPOSIT_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
+  DEPOSIT_EXPIRY_GRACE_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(86_400_000)
+    .default(900_000),
+  RECONCILIATION_TZ: z
+    .string()
+    .min(1)
+    .default('UTC')
+    .refine((tz) => {
+      try {
+        new Intl.DateTimeFormat(undefined, { timeZone: tz });
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'RECONCILIATION_TZ must be a valid IANA time zone'),
+  TRUST_PROXY: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .regex(/^(?:true|false|loopback|\d+)$/i, 'Invalid TRUST_PROXY value')
+      .optional(),
+  ),
+  RETENTION_CLEANUP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .max(86_400_000)
+    .default(300_000),
   PROVIDER_HTTP_TIMEOUT_MS: z.coerce
     .number()
     .int()
