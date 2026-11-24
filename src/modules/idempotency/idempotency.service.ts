@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { and, eq, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gt, lte, or, sql } from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import { sha256CanonicalJson } from '../../common/utils/canonical-json.util.js';
@@ -27,10 +27,12 @@ export class IdempotencyService {
     scope: string;
     key: string;
     requestBody: unknown;
+    requestHashOverride?: string;
     statusCode?: number;
     handler: (tx: DbTransaction) => Promise<T>;
   }): Promise<IdempotentExecutionResult<T>> {
-    const requestHash = sha256CanonicalJson(params.requestBody);
+    const requestHash =
+      params.requestHashOverride ?? sha256CanonicalJson(params.requestBody);
     const expiresAt = new Date(Date.now() + IDEMPOTENCY_DEFAULT_TTL_MS);
     const targetStatus = params.statusCode ?? HttpStatus.CREATED;
 
@@ -104,17 +106,17 @@ export class IdempotencyService {
     scope: string;
     key: string;
     requestBody: unknown;
+    requestHashOverride?: string;
     leaseMs?: number;
   }): Promise<
     | { kind: 'CLAIMED'; leaseVersion: bigint }
     | { kind: 'REPLAY'; statusCode: number; body: T }
   > {
-    const requestHash = sha256CanonicalJson(params.requestBody);
-    const now = new Date();
-    const lockedUntil = new Date(
-      now.getTime() + (params.leaseMs ?? IDEMPOTENCY_DEFAULT_LEASE_MS),
-    );
-    const expiresAt = new Date(now.getTime() + IDEMPOTENCY_DEFAULT_TTL_MS);
+    const requestHash =
+      params.requestHashOverride ?? sha256CanonicalJson(params.requestBody);
+    const leaseMs = params.leaseMs ?? IDEMPOTENCY_DEFAULT_LEASE_MS;
+    const lockedUntilExpr = sql<Date>`NOW() + (${leaseMs} * INTERVAL '1 millisecond')`;
+    const expiresAt = new Date(Date.now() + IDEMPOTENCY_DEFAULT_TTL_MS);
 
     return this._databaseService.runInTransaction(async (tx) => {
       const [inserted] = await tx
@@ -124,7 +126,7 @@ export class IdempotencyService {
           key: params.key,
           requestHash,
           status: 'IN_PROGRESS',
-          lockedUntil,
+          lockedUntil: lockedUntilExpr,
           leaseVersion: 1n,
           expiresAt,
         })
@@ -152,7 +154,7 @@ export class IdempotencyService {
       const reclaimed = await tx
         .update(idempotencyKeys)
         .set({
-          lockedUntil,
+          lockedUntil: lockedUntilExpr,
           leaseVersion: sql`${idempotencyKeys.leaseVersion} + 1`,
         })
         .where(
@@ -162,7 +164,7 @@ export class IdempotencyService {
             eq(idempotencyKeys.status, 'IN_PROGRESS'),
             or(
               sql`${idempotencyKeys.lockedUntil} IS NULL`,
-              lte(idempotencyKeys.lockedUntil, now),
+              lte(idempotencyKeys.lockedUntil, sql`NOW()`),
             ),
           ),
         )
@@ -204,6 +206,7 @@ export class IdempotencyService {
           eq(idempotencyKeys.key, params.key),
           eq(idempotencyKeys.status, 'IN_PROGRESS'),
           eq(idempotencyKeys.leaseVersion, params.leaseVersion),
+          gt(idempotencyKeys.lockedUntil, sql`NOW()`),
         ),
       )
       .returning({ key: idempotencyKeys.key });

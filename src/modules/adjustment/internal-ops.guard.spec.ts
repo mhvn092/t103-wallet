@@ -18,18 +18,72 @@ function createContext(opts: { key?: string; ip?: string }) {
 }
 
 function makeConfig(
-  overrides: Partial<Record<keyof EnvConfig, string | undefined>>,
+  overrides: Partial<{
+    APP_ENV: EnvConfig['APP_ENV'];
+    NODE_ENV: EnvConfig['NODE_ENV'];
+    ALLOW_UNAUTHENTICATED_INTERNAL_OPS: boolean;
+    INTERNAL_API_KEY: string;
+    INTERNAL_ALLOWED_IPS: string;
+  }>,
 ) {
   return {
-    get: (key: keyof EnvConfig) =>
-      overrides[key] ?? (key === 'APP_ENV' ? 'local' : undefined),
+    get: (key: keyof EnvConfig) => {
+      if (key in overrides) {
+        return overrides[key as keyof typeof overrides];
+      }
+      if (key === 'APP_ENV') {
+        return 'local';
+      }
+      if (key === 'NODE_ENV') {
+        return 'development';
+      }
+      if (key === 'ALLOW_UNAUTHENTICATED_INTERNAL_OPS') {
+        return false;
+      }
+      return undefined;
+    },
   } as unknown as ConfigService<EnvConfig, true>;
 }
 
 describe('InternalOpsGuard', () => {
-  it('allows requests in local env when INTERNAL_API_KEY and INTERNAL_ALLOWED_IPS are unset', () => {
-    const guard = new InternalOpsGuard(makeConfig({ APP_ENV: 'local' }));
+  it('allows requests in local dev env when INTERNAL_API_KEY and INTERNAL_ALLOWED_IPS are unset', () => {
+    const guard = new InternalOpsGuard(
+      makeConfig({ APP_ENV: 'local', NODE_ENV: 'development' }),
+    );
     expect(guard.canActivate(createContext({}))).toBe(true);
+  });
+
+  it('fails closed when NODE_ENV=production and APP_ENV=local unless ALLOW_UNAUTHENTICATED_INTERNAL_OPS=true (F-11)', () => {
+    const guardBlocked = new InternalOpsGuard(
+      makeConfig({
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+        ALLOW_UNAUTHENTICATED_INTERNAL_OPS: false,
+      }),
+    );
+    expect(() => guardBlocked.canActivate(createContext({}))).toThrow(
+      /INTERNAL_API_KEY/,
+    );
+
+    const guardComposeOptIn = new InternalOpsGuard(
+      makeConfig({
+        APP_ENV: 'local',
+        NODE_ENV: 'production',
+        ALLOW_UNAUTHENTICATED_INTERNAL_OPS: true,
+      }),
+    );
+    expect(guardComposeOptIn.canActivate(createContext({}))).toBe(true);
+
+    const guardRealProd = new InternalOpsGuard(
+      makeConfig({
+        APP_ENV: 'production',
+        NODE_ENV: 'production',
+        ALLOW_UNAUTHENTICATED_INTERNAL_OPS: true,
+      }),
+    );
+    expect(() => guardRealProd.canActivate(createContext({}))).toThrow(
+      /INTERNAL_API_KEY/,
+    );
   });
 
   it('fails closed in production when INTERNAL_API_KEY is unset even if IP allowlist is set', () => {

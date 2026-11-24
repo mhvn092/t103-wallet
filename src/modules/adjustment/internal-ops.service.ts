@@ -41,6 +41,7 @@ export class InternalOpsService {
 
   async settleReceivable(params: {
     idempotencyKey: string;
+    requestHash?: string;
     dto: ReceivableSettleDto;
     operatorId: string;
   }): Promise<IdempotentExecutionResult<ReceivableSettleResponseDto>> {
@@ -69,9 +70,10 @@ export class InternalOpsService {
 
     return this._idempotencyService.executeInTransaction<ReceivableSettleResponseDto>(
       {
-        scope: `POST:/internal/receivables/settle:${dto.userId}`,
+        scope: 'POST:/internal/receivables/settle',
         key: params.idempotencyKey,
         requestBody: dto,
+        requestHashOverride: params.requestHash,
         statusCode: HttpStatus.OK,
         handler: async (tx) => {
           const frozen = await this._walletService.lockUserRestriction(
@@ -275,6 +277,35 @@ export class InternalOpsService {
       balanceDriftAccounts: driftCount,
       pausedWithdrawalCurrencies,
     };
+  }
+
+  formatPrometheusMetrics(metrics: InternalMetricsResponseDto): string {
+    const irtPaused = metrics.pausedWithdrawalCurrencies.includes('IRT')
+      ? 1
+      : 0;
+    const usdtPaused = metrics.pausedWithdrawalCurrencies.includes('USDT')
+      ? 1
+      : 0;
+
+    return [
+      '# HELP t103_open_discrepancies Number of OPEN financial discrepancy rows',
+      '# TYPE t103_open_discrepancies gauge',
+      `t103_open_discrepancies ${metrics.openDiscrepancies}`,
+      '# HELP t103_manual_review_withdrawals Number of withdrawals in MANUAL_REVIEW',
+      '# TYPE t103_manual_review_withdrawals gauge',
+      `t103_manual_review_withdrawals ${metrics.manualReviewWithdrawals}`,
+      '# HELP t103_pending_outbox_events Number of PENDING transactional outbox events',
+      '# TYPE t103_pending_outbox_events gauge',
+      `t103_pending_outbox_events ${metrics.pendingOutboxEvents}`,
+      '# HELP t103_balance_drift_accounts Number of USER accounts whose balance differs from ledger sum',
+      '# TYPE t103_balance_drift_accounts gauge',
+      `t103_balance_drift_accounts ${metrics.balanceDriftAccounts}`,
+      '# HELP t103_withdrawals_paused Emergency withdrawal kill-switch state per currency (1=paused, 0=active)',
+      '# TYPE t103_withdrawals_paused gauge',
+      `t103_withdrawals_paused{currency="IRT"} ${irtPaused}`,
+      `t103_withdrawals_paused{currency="USDT"} ${usdtPaused}`,
+      '',
+    ].join('\n');
   }
 
   private _getCachedBalanceDriftAccounts(): Promise<number> {

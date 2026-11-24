@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 class ReconciliationSummaryDto {
   @ApiProperty({ example: 12 })
@@ -9,6 +9,9 @@ class ReconciliationSummaryDto {
 
   @ApiProperty({ example: 10 })
   matchedCount!: number;
+
+  @ApiProperty({ example: 0 })
+  adjacentDayMatchedCount!: number;
 
   @ApiProperty({ example: 2 })
   mismatchCount!: number;
@@ -40,6 +43,32 @@ export class ReconciliationMismatchDto {
   details!: string;
 }
 
+export class ReconciliationAdjacentDayMatchDto {
+  @ApiProperty({ example: 'MATCHED_ADJACENT_DAY' })
+  type!: 'MATCHED_ADJACENT_DAY';
+
+  @ApiProperty({ example: '1382264189' })
+  reference!: string;
+
+  @ApiProperty({ example: '50000' })
+  csvAmount!: string;
+
+  @ApiProperty({ example: '50000' })
+  localAmount!: string;
+
+  @ApiProperty({ format: 'uuid' })
+  depositId!: string;
+
+  @ApiProperty({ format: 'date-time', nullable: true, type: String })
+  verifiedAt!: string | null;
+
+  @ApiProperty({
+    example:
+      'CSV settlement row matched a SUCCEEDED deposit verified on an adjacent day within [-1d, +2d) cutoff window',
+  })
+  details!: string;
+}
+
 export class ReconciliationResponseDto {
   @ApiProperty({ example: '2026-11-24' })
   date!: string;
@@ -49,4 +78,7 @@ export class ReconciliationResponseDto {
 
   @ApiProperty({ type: [ReconciliationMismatchDto] })
   mismatches!: ReconciliationMismatchDto[];
+
+  @ApiPropertyOptional({ type: [ReconciliationAdjacentDayMatchDto] })
+  adjacentDayMatches!: ReconciliationAdjacentDayMatchDto[];
 }

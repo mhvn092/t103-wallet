@@ -109,6 +109,7 @@ export const withdrawals = pgTable(
     providerRefId: text('provider_ref_id'),
     status: text('status').notNull(), // 'PENDING_DISPATCH' | 'DISPATCHING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'MANUAL_REVIEW'
     failureReason: text('failure_reason'),
+    terminalReturn: boolean('terminal_return').notNull().default(false),
     lateSuccessConflict: boolean('late_success_conflict')
       .notNull()
       .default(false),

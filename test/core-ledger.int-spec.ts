@@ -131,6 +131,37 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
       await client.query('ROLLBACK').catch(() => {});
       client.release();
     }
+
+    // F-04: Attempting to dequeue trg_ledger_tx_assert_balanced via SET CONSTRAINTS IMMEDIATE mid-TX must still be blocked by trg_ledger_item_assert_balanced
+    const cBypass = await database.pool.connect();
+    try {
+      await cBypass.query('BEGIN');
+      const bypassTxId = generateUuidV7();
+      await cBypass.query(
+        `INSERT INTO ledger_transactions (id, type, reference_type, reference_id, description)
+         VALUES ($1, 'OPS_ADJ', 'ADJUSTMENT', $2, 'set constraints immediate bypass attempt')`,
+        [bypassTxId, generateUuidV7()],
+      );
+      await cBypass.query(
+        `INSERT INTO ledger_items (transaction_id, account_id, user_id, account_type, currency, direction, amount)
+         VALUES
+           ($1, '01900000-0000-7000-8000-000000000004', NULL, 'ADJUSTMENT', 'USDT', 'DEBIT', 1),
+           ($1, $2, $3, 'AVAILABLE', 'USDT', 'CREDIT', 1)`,
+        [bypassTxId, u1, userId],
+      );
+      await cBypass.query(
+        `SET CONSTRAINTS trg_ledger_tx_assert_balanced IMMEDIATE`,
+      );
+      await cBypass.query(
+        `INSERT INTO ledger_items (transaction_id, account_id, user_id, account_type, currency, direction, amount)
+         VALUES ($1, $2, $3, 'AVAILABLE', 'USDT', 'CREDIT', 999999999)`,
+        [bypassTxId, u1, userId],
+      );
+      await expect(cBypass.query('COMMIT')).rejects.toThrow(/unbalanced/);
+    } finally {
+      await cBypass.query('ROLLBACK').catch(() => {});
+      cBypass.release();
+    }
   });
 
   it('rejects negative USER AVAILABLE balances and post-commit item appends', async () => {
@@ -354,5 +385,75 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
     const retentionWorker = app.get(RetentionWorker);
     const purged = await retentionWorker.purgeExpiredOperationalRecords(100);
     expect(purged.idempotencyDeleted).toBeGreaterThanOrEqual(1);
+
+    // F-08: Ledger cursor rejects BIGINT overflow (400 INVALID_REQUEST) while accepting MAX_PG_BIGINT
+    const ovfCursor = await request(app.getHttpServer())
+      .get('/wallets/corr_probe/ledger?cursor=9223372036854775808')
+      .expect(400);
+    expect(ovfCursor.body.code).toBe('INVALID_REQUEST');
+
+    await request(app.getHttpServer())
+      .get('/wallets/corr_probe/ledger?cursor=9223372036854775807')
+      .expect(200);
+
+    // Prometheus text exposition endpoint
+    const promRes = await request(app.getHttpServer())
+      .get('/internal/metrics/prometheus')
+      .expect(200);
+    expect(promRes.headers['content-type']).toContain('text/plain');
+    expect(promRes.text).toContain('t103_balance_drift_accounts 0');
+    expect(promRes.text).toContain('t103_withdrawals_paused{currency="IRT"} 0');
+
+    // F-09: Verify least-privilege app role grants DELETE strictly on retention tables
+    const prevAppUser = process.env.POSTGRES_APP_USER;
+    const prevAppPass = process.env.POSTGRES_APP_PASSWORD;
+    process.env.POSTGRES_APP_USER = 't103_app_priv_probe';
+    process.env.POSTGRES_APP_PASSWORD = 'probe_pass_not_prod';
+    try {
+      await runMigrations(getRequiredTestDatabaseUri());
+      const { rows: privRows } = await database.pool.query<{
+        table_name: string;
+        can_delete: boolean;
+      }>(`
+        SELECT t.table_name,
+               has_table_privilege('t103_app_priv_probe', 'public.' || t.table_name, 'DELETE') AS can_delete
+        FROM (VALUES
+          ('idempotency_keys'),
+          ('outbox_events'),
+          ('processed_events'),
+          ('user_daily_limits'),
+          ('user_restrictions'),
+          ('accounts'),
+          ('withdrawals'),
+          ('deposits'),
+          ('ledger_transactions'),
+          ('ledger_items')
+        ) AS t(table_name)
+      `);
+      const byTable = new Map(
+        privRows.map((r) => [r.table_name, r.can_delete]),
+      );
+      expect(byTable.get('idempotency_keys')).toBe(true);
+      expect(byTable.get('outbox_events')).toBe(true);
+      expect(byTable.get('processed_events')).toBe(true);
+      expect(byTable.get('user_daily_limits')).toBe(false);
+      expect(byTable.get('user_restrictions')).toBe(false);
+      expect(byTable.get('accounts')).toBe(false);
+      expect(byTable.get('withdrawals')).toBe(false);
+      expect(byTable.get('deposits')).toBe(false);
+      expect(byTable.get('ledger_transactions')).toBe(false);
+      expect(byTable.get('ledger_items')).toBe(false);
+    } finally {
+      if (prevAppUser === undefined) {
+        delete process.env.POSTGRES_APP_USER;
+      } else {
+        process.env.POSTGRES_APP_USER = prevAppUser;
+      }
+      if (prevAppPass === undefined) {
+        delete process.env.POSTGRES_APP_PASSWORD;
+      } else {
+        process.env.POSTGRES_APP_PASSWORD = prevAppPass;
+      }
+    }
   });
 });

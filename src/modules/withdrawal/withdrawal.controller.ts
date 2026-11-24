@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
@@ -18,7 +19,12 @@ import {
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
-import { RequireIdempotencyKey } from '../idempotency/idempotency.decorator.js';
+import {
+  IdempotencyRequestHash,
+  IdempotentRoute,
+  RequireIdempotencyKey,
+} from '../idempotency/idempotency.decorator.js';
+import { IdempotencyPreCheckGuard } from '../idempotency/idempotency.guard.js';
 import { WithdrawalCreateDto } from './dto/withdrawal-create.dto.js';
 import { WithdrawalResponseDto } from './dto/withdrawal-response.dto.js';
 import { WithdrawalService } from './withdrawal.service.js';
@@ -29,6 +35,8 @@ export class WithdrawalController {
   constructor(private readonly _withdrawalService: WithdrawalService) {}
 
   @Post()
+  @UseGuards(IdempotencyPreCheckGuard)
+  @IdempotentRoute('POST:/withdrawals')
   @ApiOperation({
     summary:
       'Create an IRT or USDT withdrawal with atomic hold and limit check',
@@ -47,11 +55,13 @@ export class WithdrawalController {
   )
   async create(
     @RequireIdempotencyKey() idempotencyKey: string,
+    @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: WithdrawalCreateDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<WithdrawalResponseDto> {
     const result = await this._withdrawalService.createWithdrawal({
       idempotencyKey,
+      requestHash,
       dto,
     });
     res.status(result.statusCode);
@@ -71,9 +81,12 @@ export class WithdrawalController {
   }
 
   @Post(':id/cancel')
+  @UseGuards(IdempotencyPreCheckGuard)
+  @IdempotentRoute('POST:/withdrawals/:id/cancel', { includeParam: 'id' })
   @ApiOperation({
     summary: 'Cancel a withdrawal strictly while in PENDING_DISPATCH',
   })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({
     description: 'Withdrawal cancelled and locked funds released',
@@ -83,9 +96,21 @@ export class WithdrawalController {
     HttpStatus.BAD_REQUEST,
     HttpStatus.NOT_FOUND,
     HttpStatus.CONFLICT,
+    HttpStatus.UNPROCESSABLE_ENTITY,
   )
   @HttpCode(HttpStatus.OK)
-  cancelWithdrawal(@Param('id') id: string): Promise<WithdrawalResponseDto> {
-    return this._withdrawalService.cancelWithdrawal(id);
+  async cancelWithdrawal(
+    @Param('id') id: string,
+    @RequireIdempotencyKey() idempotencyKey: string,
+    @IdempotencyRequestHash() requestHash: string | undefined,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<WithdrawalResponseDto> {
+    const result = await this._withdrawalService.cancelWithdrawal({
+      withdrawalId: id,
+      idempotencyKey,
+      requestHash,
+    });
+    res.status(result.statusCode);
+    return result.body;
   }
 }

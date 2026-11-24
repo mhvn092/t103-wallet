@@ -32,11 +32,11 @@ export class WalletController {
     @Param('userId') userId: string,
   ): Promise<WalletBalancesResponseDto> {
     const trimmed = userId.trim();
-    if (!trimmed) {
+    if (!trimmed || trimmed.length > 128) {
       throw new DomainException(
         HttpStatus.BAD_REQUEST,
         ErrorCode.INVALID_REQUEST,
-        'userId must be non-empty',
+        'userId must be 1 to 128 characters',
       );
     }
     return this._walletService.getWalletBalances(trimmed);
@@ -55,11 +55,11 @@ export class WalletController {
     @Query() query: WalletLedgerQueryDto,
   ): Promise<WalletLedgerResponseDto> {
     const trimmedUser = userId.trim();
-    if (!trimmedUser) {
+    if (!trimmedUser || trimmedUser.length > 128) {
       throw new DomainException(
         HttpStatus.BAD_REQUEST,
         ErrorCode.INVALID_REQUEST,
-        'userId must be non-empty',
+        'userId must be 1 to 128 characters',
       );
     }
 

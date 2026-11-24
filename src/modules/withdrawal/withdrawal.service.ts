@@ -24,24 +24,27 @@ import { DatabaseService } from '../../database/database.service.js';
 import type { DbTransaction } from '../../database/database.types.js';
 import {
   financialDiscrepancies,
-  ledgerTransactions,
   systemControls,
-  userRestrictions,
   withdrawals,
 } from '../../database/schema/index.js';
-import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
-import type { LedgerPostingLine } from '../ledger/ledger.types.js';
-import { LedgerService } from '../ledger/ledger.service.js';
+import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
 import { verifyHmacSha256Hex } from '../providers/hmac.util.js';
 import { PayoutClient } from '../providers/payout.client.js';
 import type { PayoutStatusValue } from '../providers/provider.types.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import type { WithdrawalCreateDto } from './dto/withdrawal-create.dto.js';
+import type { WithdrawalResolveDto } from './dto/withdrawal-resolve.dto.js';
 import type {
   WithdrawalResponseDto,
   WithdrawalWebhookAckDto,
 } from './dto/withdrawal-response.dto.js';
+import { WithdrawalLedgerService } from './withdrawal-ledger.service.js';
+import {
+  decideWithdrawalTransition,
+  toWithdrawalStatus,
+} from './withdrawal-state-machine.util.js';
+import { detectProviderPayloadMismatch } from './withdrawal-webhook.util.js';
 import {
   WITHDRAWAL_DISPATCH_LEASE_MS,
   WITHDRAWAL_PROCESSING_POLL_DELAY_MS,
@@ -49,13 +52,9 @@ import {
 } from './withdrawal.constants.js';
 import {
   computeWithdrawalPolicyAmounts,
-  isWebhookAmountValid,
   toWithdrawalResponseDto,
 } from './withdrawal.mapper.js';
-import {
-  type PayoutWebhookPayload,
-  payoutWebhookPayloadSchema,
-} from './withdrawal.schemas.js';
+import { payoutWebhookPayloadSchema } from './withdrawal.schemas.js';
 import type {
   ClaimedWithdrawalDispatchItem,
   WithdrawalEntity,
@@ -68,12 +67,13 @@ export class WithdrawalService {
     private readonly _databaseService: DatabaseService,
     private readonly _idempotencyService: IdempotencyService,
     private readonly _walletService: WalletService,
-    private readonly _ledgerService: LedgerService,
+    private readonly _withdrawalLedgerService: WithdrawalLedgerService,
     private readonly _payoutClient: PayoutClient,
   ) {}
 
   async createWithdrawal(params: {
     idempotencyKey: string;
+    requestHash?: string;
     dto: WithdrawalCreateDto;
   }): Promise<IdempotentExecutionResult<WithdrawalResponseDto>> {
     const { dto } = params;
@@ -102,9 +102,10 @@ export class WithdrawalService {
 
     return this._idempotencyService.executeInTransaction<WithdrawalResponseDto>(
       {
-        scope: `POST:/withdrawals:${dto.userId}`,
+        scope: 'POST:/withdrawals',
         key: params.idempotencyKey,
         requestBody: dto,
+        requestHashOverride: params.requestHash,
         handler: async (tx) => {
           const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
           const normalizedDest = assertValidDestination(
@@ -168,65 +169,17 @@ export class WithdrawalService {
             );
           }
 
-          await this._walletService.addDailyLimitUsage(
-            tx,
-            dto.userId,
-            limitDate,
-            policy.irtEquivalent,
-          );
-
-          const withdrawalId = generateUuidV7();
-          const [inserted] = await tx
-            .insert(withdrawals)
-            .values({
-              id: withdrawalId,
+          const inserted =
+            await this._withdrawalLedgerService.createWithdrawalWithHold(tx, {
               userId: dto.userId,
               currency: dto.currency,
-              amount: amountMinor.toString(),
-              fee: policy.feeMinor.toString(),
-              fxRateIrt: policy.fxRateIrt.toString(),
-              irtEquivalent: policy.irtEquivalent.toString(),
+              amountMinor,
+              normalizedDest,
               limitDate,
-              quotaReleased: false,
-              destination: normalizedDest,
-              providerRequestId: `wd_${withdrawalId}`,
-              status: 'PENDING_DISPATCH',
-              lateSuccessConflict: false,
-              version: 1n,
-            })
-            .returning();
-
-          if (!inserted) {
-            throw new DomainException(
-              HttpStatus.INTERNAL_SERVER_ERROR,
-              ErrorCode.INTERNAL_ERROR,
-              'Failed to create withdrawal record',
-            );
-          }
-
-          await this._ledgerService.postTransaction(tx, {
-            type: 'WD_HOLD',
-            referenceType: 'WITHDRAWAL',
-            referenceId: withdrawalId,
-            description: `Withdrawal hold for ${dto.currency} payout`,
-            metadata: {
-              currency: dto.currency,
-              destination: normalizedDest,
-              fee: formatMinorToApi(policy.feeMinor, dto.currency),
-            },
-            postings: [
-              {
-                account: userAvailable,
-                direction: 'DEBIT',
-                amount: totalHold,
-              },
-              {
-                account: userLocked,
-                direction: 'CREDIT',
-                amount: totalHold,
-              },
-            ],
-          });
+              policy,
+              userAvailable,
+              userLocked,
+            });
 
           return toWithdrawalResponseDto(inserted);
         },
@@ -240,48 +193,176 @@ export class WithdrawalService {
     return toWithdrawalResponseDto(row);
   }
 
-  async cancelWithdrawal(withdrawalId: string): Promise<WithdrawalResponseDto> {
-    const validId = assertValidUuid(withdrawalId, 'withdrawalId');
+  async cancelWithdrawal(params: {
+    withdrawalId: string;
+    idempotencyKey: string;
+    requestHash?: string;
+  }): Promise<IdempotentExecutionResult<WithdrawalResponseDto>> {
+    const validId = assertValidUuid(params.withdrawalId, 'withdrawalId');
 
-    const updated = await this._databaseService.runInTransaction(async (tx) => {
-      const [locked] = await tx
-        .select()
-        .from(withdrawals)
-        .where(eq(withdrawals.id, validId))
-        .for('update')
-        .limit(1);
+    return this._idempotencyService.executeInTransaction<WithdrawalResponseDto>(
+      {
+        scope: 'POST:/withdrawals/:id/cancel',
+        key: params.idempotencyKey,
+        requestBody: { id: validId },
+        requestHashOverride: params.requestHash,
+        statusCode: HttpStatus.OK,
+        handler: async (tx) => {
+          const [locked] = await tx
+            .select()
+            .from(withdrawals)
+            .where(eq(withdrawals.id, validId))
+            .for('update')
+            .limit(1);
 
-      if (!locked) {
-        throw new DomainException(
-          HttpStatus.NOT_FOUND,
-          ErrorCode.NOT_FOUND,
-          'Withdrawal not found',
-        );
-      }
+          if (!locked) {
+            throw new DomainException(
+              HttpStatus.NOT_FOUND,
+              ErrorCode.NOT_FOUND,
+              'Withdrawal not found',
+            );
+          }
 
-      if (
-        locked.status === 'FAILED' &&
-        locked.failureReason === 'CANCELLED_BY_USER'
-      ) {
-        return locked;
-      }
+          const action = decideWithdrawalTransition(
+            {
+              status: toWithdrawalStatus(locked.status),
+              failureReason: locked.failureReason,
+              terminalReturn: locked.terminalReturn,
+              lateSuccessConflict: locked.lateSuccessConflict,
+              hasPriorSettlementOrReturn: false,
+              authoritativeConfirmed: false,
+            },
+            { kind: 'USER_CANCEL' },
+          );
 
-      if (locked.status !== 'PENDING_DISPATCH') {
-        throw new DomainException(
-          HttpStatus.CONFLICT,
-          ErrorCode.INVALID_STATE_TRANSITION,
-          `Cannot cancel withdrawal in status ${locked.status}`,
-        );
-      }
+          if (action.kind === 'NOOP') {
+            return toWithdrawalResponseDto(locked);
+          }
 
-      return this._transitionLockedToFailedAndRelease(
-        tx,
-        locked,
-        'CANCELLED_BY_USER',
-      );
+          if (action.kind === 'INVALID_TRANSITION') {
+            throw new DomainException(
+              HttpStatus.CONFLICT,
+              ErrorCode.INVALID_STATE_TRANSITION,
+              action.reason,
+            );
+          }
+
+          if (action.kind === 'FAIL_AND_RELEASE') {
+            const updated =
+              await this._withdrawalLedgerService.failAndReleaseLockedWithdrawal(
+                tx,
+                locked,
+                {
+                  reason: 'CANCELLED_BY_USER',
+                  markTerminalReturn: action.markTerminalReturn,
+                },
+              );
+            return toWithdrawalResponseDto(updated);
+          }
+
+          return toWithdrawalResponseDto(locked);
+        },
+      },
+    );
+  }
+
+  async resolveManualReview(params: {
+    withdrawalId: string;
+    idempotencyKey: string;
+    requestHash?: string;
+    dto: WithdrawalResolveDto;
+    operatorId: string;
+  }): Promise<IdempotentExecutionResult<WithdrawalResponseDto>> {
+    const validId = assertValidUuid(params.withdrawalId, 'withdrawalId');
+    const preRead = await this._requireWithdrawal(validId);
+    const ccy: Currency = preRead.currency === 'USDT' ? 'USDT' : 'IRT';
+
+    await this._walletService.ensureUserScaffold({
+      accountSpecs: [
+        { userId: preRead.userId, currency: ccy, accountType: 'AVAILABLE' },
+        { userId: preRead.userId, currency: ccy, accountType: 'LOCKED' },
+      ],
+      dailyLimitKeys: [
+        { userId: preRead.userId, limitDate: preRead.limitDate },
+      ],
+      restrictionUserIds: [preRead.userId],
     });
 
-    return toWithdrawalResponseDto(updated);
+    return this._idempotencyService.executeInTransaction<WithdrawalResponseDto>(
+      {
+        scope: 'POST:/internal/withdrawals/:id/resolve',
+        key: params.idempotencyKey,
+        requestBody: { id: validId, body: params.dto },
+        requestHashOverride: params.requestHash,
+        statusCode: HttpStatus.OK,
+        handler: async (tx) => {
+          const [locked] = await tx
+            .select()
+            .from(withdrawals)
+            .where(eq(withdrawals.id, validId))
+            .for('update')
+            .limit(1);
+
+          if (!locked) {
+            throw new DomainException(
+              HttpStatus.NOT_FOUND,
+              ErrorCode.NOT_FOUND,
+              'Withdrawal not found',
+            );
+          }
+
+          const action = decideWithdrawalTransition(
+            {
+              status: toWithdrawalStatus(locked.status),
+              failureReason: locked.failureReason,
+              terminalReturn: locked.terminalReturn,
+              lateSuccessConflict: locked.lateSuccessConflict,
+              hasPriorSettlementOrReturn: false,
+              authoritativeConfirmed: true,
+            },
+            { kind: 'OPS_RESOLVE', outcome: params.dto.outcome },
+          );
+
+          if (action.kind === 'INVALID_TRANSITION') {
+            throw new DomainException(
+              HttpStatus.CONFLICT,
+              ErrorCode.INVALID_STATE_TRANSITION,
+              action.reason,
+            );
+          }
+
+          if (action.kind === 'SETTLE') {
+            const settled =
+              await this._withdrawalLedgerService.settleLockedWithdrawal(
+                tx,
+                locked,
+                {
+                  providerRefId: params.dto.providerRefId ?? null,
+                  operatorId: params.operatorId,
+                  reason: params.dto.reason,
+                },
+              );
+            return toWithdrawalResponseDto(settled);
+          }
+
+          if (action.kind === 'FAIL_AND_RELEASE') {
+            const failed =
+              await this._withdrawalLedgerService.failAndReleaseLockedWithdrawal(
+                tx,
+                locked,
+                {
+                  reason: params.dto.reason,
+                  markTerminalReturn: action.markTerminalReturn,
+                  operatorId: params.operatorId,
+                },
+              );
+            return toWithdrawalResponseDto(failed);
+          }
+
+          return toWithdrawalResponseDto(locked);
+        },
+      },
+    );
   }
 
   async dispatchPendingBatch(limit = 10): Promise<number> {
@@ -347,7 +428,19 @@ export class WithdrawalService {
       return { received: true };
     }
 
-    await this._checkWebhookPayloadMismatch(row, parsed.data);
+    if (detectProviderPayloadMismatch(row, parsed.data)) {
+      const escalated = await this._recordPayloadMismatchAndEscalate({
+        row,
+        providedAmount: parsed.data.amount ?? null,
+        providedCurrency: parsed.data.currency ?? null,
+        status: parsed.data.status ?? null,
+      });
+      return {
+        received: true,
+        withdrawalId: escalated.id,
+        status: escalated.status,
+      };
+    }
 
     const updated = await this._applyProviderStatus(
       row.id,
@@ -355,6 +448,7 @@ export class WithdrawalService {
       {
         providerRefId: parsed.data.refId ?? parsed.data.trackingId ?? null,
         reason: parsed.data.reason ?? parsed.data.failureReason ?? null,
+        source: 'WEBHOOK',
       },
     );
 
@@ -535,9 +629,24 @@ export class WithdrawalService {
         row.providerRequestId,
       );
       if (recovery.kind === 'FOUND') {
+        if (
+          detectProviderPayloadMismatch(row, {
+            amount: recovery.amount,
+            currency: recovery.currency,
+          })
+        ) {
+          await this._recordPayloadMismatchAndEscalate({
+            row,
+            providedAmount: recovery.amount ?? null,
+            providedCurrency: recovery.currency ?? null,
+            status: recovery.status,
+          });
+          return;
+        }
         await this._applyProviderStatus(row.id, recovery.status, {
           providerRefId: recovery.providerRefId,
           reason: recovery.failureReason,
+          source: 'POLLER',
         });
         return;
       }
@@ -672,7 +781,14 @@ export class WithdrawalService {
         return;
       }
 
-      await this._transitionLockedToFailedAndRelease(tx, locked, reason);
+      await this._withdrawalLedgerService.failAndReleaseLockedWithdrawal(
+        tx,
+        locked,
+        {
+          reason,
+          markTerminalReturn: false,
+        },
+      );
     });
   }
 
@@ -685,12 +801,27 @@ export class WithdrawalService {
         row.providerRequestId,
       );
       if (inquiry.kind === 'FOUND') {
+        if (
+          detectProviderPayloadMismatch(row, {
+            amount: inquiry.amount,
+            currency: inquiry.currency,
+          })
+        ) {
+          await this._recordPayloadMismatchAndEscalate({
+            row,
+            providedAmount: inquiry.amount ?? null,
+            providedCurrency: inquiry.currency ?? null,
+            status: inquiry.status,
+          });
+          return;
+        }
         const updated = await this._applyProviderStatus(
           row.id,
           inquiry.status,
           {
             providerRefId: inquiry.providerRefId,
             reason: inquiry.failureReason,
+            source: 'POLLER',
           },
         );
         if (
@@ -779,7 +910,11 @@ export class WithdrawalService {
   private async _applyProviderStatus(
     withdrawalId: string,
     providerStatus: PayoutStatusValue,
-    meta: { providerRefId: string | null; reason: string | null },
+    meta: {
+      providerRefId: string | null;
+      reason: string | null;
+      source: 'WEBHOOK' | 'POLLER';
+    },
   ): Promise<WithdrawalResponseDto> {
     const preRead = await this._requireWithdrawal(withdrawalId);
     const ccy: Currency = preRead.currency === 'USDT' ? 'USDT' : 'IRT';
@@ -810,105 +945,196 @@ export class WithdrawalService {
       });
     }
 
-    const updated = await this._databaseService.runInTransaction(async (tx) => {
-      const [locked] = await tx
-        .select()
-        .from(withdrawals)
-        .where(eq(withdrawals.id, withdrawalId))
-        .for('update')
-        .limit(1);
+    const txOutcome = await this._databaseService.runInTransaction(
+      async (tx) => {
+        const [locked] = await tx
+          .select()
+          .from(withdrawals)
+          .where(eq(withdrawals.id, withdrawalId))
+          .for('update')
+          .limit(1);
 
-      if (!locked) {
-        throw new DomainException(
-          HttpStatus.NOT_FOUND,
-          ErrorCode.NOT_FOUND,
-          'Withdrawal not found',
+        if (!locked) {
+          throw new DomainException(
+            HttpStatus.NOT_FOUND,
+            ErrorCode.NOT_FOUND,
+            'Withdrawal not found',
+          );
+        }
+
+        return this._routeLockedStatusTransition(
+          tx,
+          locked,
+          providerStatus,
+          meta,
         );
+      },
+    );
+
+    if (txOutcome.kind === 'NEEDS_AUTHORITATIVE_VERIFY') {
+      return this._verifyLateSuccessAgainstProvider(
+        txOutcome.row,
+        meta.providerRefId,
+      );
+    }
+
+    return toWithdrawalResponseDto(txOutcome.row);
+  }
+
+  private async _verifyLateSuccessAgainstProvider(
+    row: WithdrawalEntity,
+    fallbackRefId: string | null,
+  ): Promise<WithdrawalResponseDto> {
+    const inquiry = await this._payoutClient.getTransfer(row.providerRequestId);
+    if (inquiry.kind === 'AMBIGUOUS') {
+      throw new DomainException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        ErrorCode.PROVIDER_UNAVAILABLE,
+        `Payout verification failed for late SUCCEEDED check: ${inquiry.reason}`,
+      );
+    }
+
+    if (inquiry.kind === 'FOUND') {
+      if (
+        detectProviderPayloadMismatch(row, {
+          amount: inquiry.amount,
+          currency: inquiry.currency,
+        })
+      ) {
+        const escalated = await this._recordPayloadMismatchAndEscalate({
+          row,
+          providedAmount: inquiry.amount ?? null,
+          providedCurrency: inquiry.currency ?? null,
+          status: inquiry.status,
+        });
+        return toWithdrawalResponseDto(escalated);
       }
 
-      return this._routeLockedStatusTransition(
-        tx,
-        locked,
-        providerStatus,
-        meta,
-      );
-    });
+      if (inquiry.status === 'SUCCEEDED') {
+        return this._applyProviderStatus(row.id, 'SUCCEEDED', {
+          providerRefId: inquiry.providerRefId ?? fallbackRefId,
+          reason: inquiry.failureReason,
+          source: 'POLLER',
+        });
+      }
 
-    return toWithdrawalResponseDto(updated);
+      if (inquiry.status === 'RETURNED' || inquiry.status === 'REVERSED') {
+        return this._applyProviderStatus(row.id, inquiry.status, {
+          providerRefId: inquiry.providerRefId ?? fallbackRefId,
+          reason: inquiry.failureReason,
+          source: 'POLLER',
+        });
+      }
+    }
+
+    const latest = await this._requireWithdrawal(row.id);
+    return toWithdrawalResponseDto(latest);
   }
 
   private async _routeLockedStatusTransition(
     tx: DbTransaction,
     locked: WithdrawalEntity,
     providerStatus: PayoutStatusValue,
-    meta: { providerRefId: string | null; reason: string | null },
-  ): Promise<WithdrawalEntity> {
-    if (providerStatus === 'PENDING' || providerStatus === 'PROCESSING') {
-      return this._advanceToProcessingIfDispatching(
-        tx,
-        locked,
-        meta.providerRefId,
-      );
-    }
+    meta: {
+      providerRefId: string | null;
+      reason: string | null;
+      source: 'WEBHOOK' | 'POLLER';
+    },
+  ): Promise<
+    | { kind: 'DONE'; row: WithdrawalEntity }
+    | { kind: 'NEEDS_AUTHORITATIVE_VERIFY'; row: WithdrawalEntity }
+  > {
+    const hasPrior =
+      locked.status === 'FAILED' && providerStatus === 'SUCCEEDED'
+        ? await this._withdrawalLedgerService.hasPriorSettlementOrReturn(
+            tx,
+            locked.id,
+          )
+        : false;
 
-    if (providerStatus === 'SUCCEEDED') {
-      if (locked.status === 'SUCCEEDED') {
-        return locked;
-      }
-      if (locked.status === 'FAILED') {
-        if (
-          locked.failureReason === 'CANCELLED_BY_USER' ||
-          (await this._hasPriorSettlementOrReturn(tx, locked.id))
-        ) {
-          return locked;
-        }
-        return this._handleLateSuccessConflict(tx, locked, meta);
-      }
-      if (
-        locked.status === 'DISPATCHING' ||
-        locked.status === 'PROCESSING' ||
-        locked.status === 'MANUAL_REVIEW'
-      ) {
-        return this._settleLockedWithdrawal(tx, locked, meta.providerRefId);
-      }
-      return locked;
-    }
+    const action = decideWithdrawalTransition(
+      {
+        status: toWithdrawalStatus(locked.status),
+        failureReason: locked.failureReason,
+        terminalReturn: locked.terminalReturn,
+        lateSuccessConflict: locked.lateSuccessConflict,
+        hasPriorSettlementOrReturn: hasPrior,
+        authoritativeConfirmed: meta.source === 'POLLER',
+      },
+      { kind: 'PROVIDER_STATUS', status: providerStatus },
+    );
 
-    if (providerStatus === 'FAILED') {
-      if (
-        locked.status === 'DISPATCHING' ||
-        locked.status === 'PROCESSING' ||
-        locked.status === 'MANUAL_REVIEW'
-      ) {
-        return this._transitionLockedToFailedAndRelease(
-          tx,
-          locked,
-          meta.reason ?? 'PROVIDER_FAILED',
-        );
+    switch (action.kind) {
+      case 'NOOP':
+      case 'INVALID_TRANSITION':
+        return { kind: 'DONE', row: locked };
+      case 'NEEDS_AUTHORITATIVE_VERIFY':
+        return { kind: 'NEEDS_AUTHORITATIVE_VERIFY', row: locked };
+      case 'ADVANCE_TO_PROCESSING':
+        return {
+          kind: 'DONE',
+          row: await this._advanceToProcessingIfDispatching(
+            tx,
+            locked,
+            meta.providerRefId,
+          ),
+        };
+      case 'SETTLE':
+        return {
+          kind: 'DONE',
+          row: await this._withdrawalLedgerService.settleLockedWithdrawal(
+            tx,
+            locked,
+            {
+              providerRefId: meta.providerRefId,
+            },
+          ),
+        };
+      case 'FAIL_AND_RELEASE': {
+        const defaultReason =
+          providerStatus === 'RETURNED' || providerStatus === 'REVERSED'
+            ? 'BANK_RETURNED'
+            : 'PROVIDER_FAILED';
+        return {
+          kind: 'DONE',
+          row: await this._withdrawalLedgerService.failAndReleaseLockedWithdrawal(
+            tx,
+            locked,
+            {
+              reason: meta.reason ?? defaultReason,
+              markTerminalReturn: action.markTerminalReturn,
+            },
+          ),
+        };
       }
-      return locked;
+      case 'REVERSE_SUCCEEDED':
+        return {
+          kind: 'DONE',
+          row: await this._withdrawalLedgerService.reverseSucceededWithdrawal(
+            tx,
+            locked,
+            meta.reason ?? 'BANK_RETURNED',
+          ),
+        };
+      case 'MARK_TERMINAL_RETURN_ONLY':
+        return {
+          kind: 'DONE',
+          row: await this._withdrawalLedgerService.markTerminalReturnOnly(
+            tx,
+            locked,
+            meta.reason ?? 'BANK_RETURNED',
+          ),
+        };
+      case 'LATE_SUCCESS_CLAWBACK':
+        return {
+          kind: 'DONE',
+          row: await this._withdrawalLedgerService.handleLateSuccessConflict(
+            tx,
+            locked,
+            meta,
+          ),
+        };
     }
-
-    // RETURNED | REVERSED
-    if (locked.status === 'SUCCEEDED') {
-      return this._reverseSucceededWithdrawal(
-        tx,
-        locked,
-        meta.reason ?? 'BANK_RETURNED',
-      );
-    }
-    if (
-      locked.status === 'DISPATCHING' ||
-      locked.status === 'PROCESSING' ||
-      locked.status === 'MANUAL_REVIEW'
-    ) {
-      return this._transitionLockedToFailedAndRelease(
-        tx,
-        locked,
-        meta.reason ?? 'BANK_RETURNED',
-      );
-    }
-    return locked;
   }
 
   private async _advanceToProcessingIfDispatching(
@@ -938,328 +1164,6 @@ export class WithdrawalService {
     return updated ?? locked;
   }
 
-  private async _settleLockedWithdrawal(
-    tx: DbTransaction,
-    locked: WithdrawalEntity,
-    providerRefId: string | null,
-  ): Promise<WithdrawalEntity> {
-    const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
-    const lockedSpec = {
-      userId: locked.userId,
-      currency: ccy,
-      accountType: 'LOCKED' as const,
-    };
-
-    const lockedAccounts = await this._walletService.lockUserAccountsCanonical(
-      tx,
-      [lockedSpec],
-    );
-    const userLocked = this._walletService.getRequiredLockedAccount(
-      lockedAccounts,
-      lockedSpec,
-    );
-    const payoutClearing = await this._walletService.getSystemAccount(
-      tx,
-      'PAYOUT_CLEARING',
-      ccy,
-    );
-
-    const amountMinor = BigInt(locked.amount);
-    const feeMinor = BigInt(locked.fee);
-    const postings: LedgerPostingLine[] = [
-      {
-        account: userLocked,
-        direction: 'DEBIT',
-        amount: amountMinor + feeMinor,
-      },
-      {
-        account: payoutClearing,
-        direction: 'CREDIT',
-        amount: amountMinor,
-      },
-    ];
-
-    if (feeMinor > 0n) {
-      const feeRevenue = await this._walletService.getSystemAccount(
-        tx,
-        'FEE_REVENUE',
-        ccy,
-      );
-      postings.push({
-        account: feeRevenue,
-        direction: 'CREDIT',
-        amount: feeMinor,
-      });
-    }
-
-    await this._ledgerService.postTransaction(tx, {
-      type: 'WD_SETTLE',
-      referenceType: 'WITHDRAWAL',
-      referenceId: locked.id,
-      description: `Withdrawal settled via payout provider (${locked.providerRequestId})`,
-      metadata: {
-        providerRequestId: locked.providerRequestId,
-        providerRefId,
-      },
-      postings,
-    });
-
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
-        status: 'SUCCEEDED',
-        providerRefId: providerRefId ?? locked.providerRefId,
-        leaseUntil: null,
-        nextPollAt: null,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
-
-    return updated ?? locked;
-  }
-
-  private async _transitionLockedToFailedAndRelease(
-    tx: DbTransaction,
-    locked: WithdrawalEntity,
-    reason: string,
-  ): Promise<WithdrawalEntity> {
-    const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
-    const availableSpec = {
-      userId: locked.userId,
-      currency: ccy,
-      accountType: 'AVAILABLE' as const,
-    };
-    const lockedSpec = {
-      userId: locked.userId,
-      currency: ccy,
-      accountType: 'LOCKED' as const,
-    };
-
-    await this._walletService.lockDailyLimit(
-      tx,
-      locked.userId,
-      locked.limitDate,
-    );
-    await this._walletService.lockUserRestriction(tx, locked.userId);
-    const lockedAccounts = await this._walletService.lockUserAccountsCanonical(
-      tx,
-      [availableSpec, lockedSpec],
-    );
-    const userAvailable = this._walletService.getRequiredLockedAccount(
-      lockedAccounts,
-      availableSpec,
-    );
-    const userLocked = this._walletService.getRequiredLockedAccount(
-      lockedAccounts,
-      lockedSpec,
-    );
-
-    const totalHold = BigInt(locked.amount) + BigInt(locked.fee);
-    await this._ledgerService.postTransaction(tx, {
-      type: 'WD_RELEASE',
-      referenceType: 'WITHDRAWAL',
-      referenceId: locked.id,
-      description: `Release locked funds for failed/cancelled withdrawal (${reason})`,
-      metadata: { reason },
-      postings: [
-        { account: userLocked, direction: 'DEBIT', amount: totalHold },
-        { account: userAvailable, direction: 'CREDIT', amount: totalHold },
-      ],
-    });
-
-    if (!locked.quotaReleased) {
-      await this._walletService.addDailyLimitUsage(
-        tx,
-        locked.userId,
-        locked.limitDate,
-        -BigInt(locked.irtEquivalent),
-      );
-    }
-
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
-        status: 'FAILED',
-        failureReason: reason,
-        quotaReleased: true,
-        leaseUntil: null,
-        nextPollAt: null,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
-
-    return updated ?? locked;
-  }
-
-  private async _reverseSucceededWithdrawal(
-    tx: DbTransaction,
-    locked: WithdrawalEntity,
-    reason: string,
-  ): Promise<WithdrawalEntity> {
-    const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
-    const otherCcy: Currency = ccy === 'IRT' ? 'USDT' : 'IRT';
-    const availableSpec = {
-      userId: locked.userId,
-      currency: ccy,
-      accountType: 'AVAILABLE' as const,
-    };
-    const receivableSpec = {
-      userId: locked.userId,
-      currency: ccy,
-      accountType: 'RECEIVABLE' as const,
-    };
-    const otherReceivableSpec = {
-      userId: locked.userId,
-      currency: otherCcy,
-      accountType: 'RECEIVABLE' as const,
-    };
-
-    await this._walletService.lockDailyLimit(
-      tx,
-      locked.userId,
-      locked.limitDate,
-    );
-    await this._walletService.lockUserRestriction(tx, locked.userId);
-    const lockedAccounts = await this._walletService.lockUserAccountsCanonical(
-      tx,
-      [availableSpec, receivableSpec, otherReceivableSpec],
-    );
-    const userAvailable = this._walletService.getRequiredLockedAccount(
-      lockedAccounts,
-      availableSpec,
-    );
-    const userReceivable = this._walletService.getRequiredLockedAccount(
-      lockedAccounts,
-      receivableSpec,
-    );
-    const otherReceivable = this._walletService.getRequiredLockedAccount(
-      lockedAccounts,
-      otherReceivableSpec,
-    );
-    const payoutClearing = await this._walletService.getSystemAccount(
-      tx,
-      'PAYOUT_CLEARING',
-      ccy,
-    );
-
-    const amountMinor = BigInt(locked.amount);
-    const feeMinor = BigInt(locked.fee);
-    const totalRefund = amountMinor + feeMinor;
-    const currentReceivable = BigInt(userReceivable.balance ?? '0');
-    const receivableCredit =
-      currentReceivable >= totalRefund ? totalRefund : currentReceivable;
-    const availableCredit = totalRefund - receivableCredit;
-
-    const postings: LedgerPostingLine[] = [
-      { account: payoutClearing, direction: 'DEBIT', amount: amountMinor },
-    ];
-    if (feeMinor > 0n) {
-      const feeRevenue = await this._walletService.getSystemAccount(
-        tx,
-        'FEE_REVENUE',
-        ccy,
-      );
-      postings.push({
-        account: feeRevenue,
-        direction: 'DEBIT',
-        amount: feeMinor,
-      });
-    }
-    if (receivableCredit > 0n) {
-      postings.push({
-        account: userReceivable,
-        direction: 'CREDIT',
-        amount: receivableCredit,
-      });
-    }
-    if (availableCredit > 0n) {
-      postings.push({
-        account: userAvailable,
-        direction: 'CREDIT',
-        amount: availableCredit,
-      });
-    }
-
-    await this._ledgerService.postTransaction(tx, {
-      type: 'WD_RETURN',
-      referenceType: 'WITHDRAWAL',
-      referenceId: locked.id,
-      description: `Bank reversal / return for withdrawal (${reason})`,
-      metadata: {
-        reason,
-        providerRefId: locked.providerRefId,
-        receivableOffset: receivableCredit.toString(),
-      },
-      postings,
-    });
-
-    if (
-      receivableCredit > 0n &&
-      currentReceivable - receivableCredit === 0n &&
-      BigInt(otherReceivable.balance ?? '0') === 0n
-    ) {
-      await tx
-        .update(userRestrictions)
-        .set({
-          outboundFrozen: false,
-          freezeReason: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(userRestrictions.userId, locked.userId));
-    }
-
-    if (!locked.quotaReleased) {
-      await this._walletService.addDailyLimitUsage(
-        tx,
-        locked.userId,
-        locked.limitDate,
-        -BigInt(locked.irtEquivalent),
-      );
-    }
-
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
-        status: 'FAILED',
-        failureReason: reason,
-        quotaReleased: true,
-        leaseUntil: null,
-        nextPollAt: null,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
-
-    return updated ?? locked;
-  }
-
-  private async _hasPriorSettlementOrReturn(
-    tx: DbTransaction,
-    withdrawalId: string,
-  ): Promise<boolean> {
-    const [existing] = await tx
-      .select({ id: ledgerTransactions.id })
-      .from(ledgerTransactions)
-      .where(
-        and(
-          eq(ledgerTransactions.referenceType, 'WITHDRAWAL'),
-          eq(ledgerTransactions.referenceId, withdrawalId),
-          inArray(ledgerTransactions.type, [
-            'WD_SETTLE',
-            'WD_RETURN',
-            'WD_LATE_SUCCESS',
-          ]),
-        ),
-      )
-      .limit(1);
-    return Boolean(existing);
-  }
-
   private async _assertCurrencyNotPaused(
     tx: DbTransaction,
     currency: Currency,
@@ -1280,220 +1184,77 @@ export class WithdrawalService {
     }
   }
 
-  private async _checkWebhookPayloadMismatch(
-    row: WithdrawalEntity,
-    payload: PayoutWebhookPayload,
-  ): Promise<void> {
-    if (
-      (payload.amount === undefined || payload.amount === null) &&
-      !payload.currency
-    ) {
-      return;
-    }
-
+  private async _recordPayloadMismatchAndEscalate(params: {
+    row: WithdrawalEntity;
+    providedAmount: string | number | null;
+    providedCurrency: string | null;
+    status: string | null;
+  }): Promise<WithdrawalEntity> {
+    const { row } = params;
     const expectedCurrency: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
-    const expectedMinor = BigInt(row.amount);
-    const normCcy = payload.currency?.trim().toUpperCase();
-
-    const currencyMismatch = Boolean(
-      normCcy &&
-      ((expectedCurrency === 'IRT' && normCcy !== 'IRR' && normCcy !== 'IRT') ||
-        (expectedCurrency === 'USDT' && normCcy !== 'USDT')),
-    );
-
-    const amountMismatch =
-      payload.amount !== undefined &&
-      payload.amount !== null &&
-      !isWebhookAmountValid(
-        expectedCurrency,
-        expectedMinor,
-        payload.amount,
-        payload.currency,
-      );
-
-    if (!currencyMismatch && !amountMismatch) {
-      return;
-    }
 
     this._logger.warn(
-      `Payout webhook payload mismatch for withdrawal=${row.id} req=${row.providerRequestId}`,
-    );
-    await this._databaseService.db
-      .insert(financialDiscrepancies)
-      .values({
-        id: generateUuidV7(),
-        referenceType: 'WITHDRAWAL',
-        referenceId: row.id,
-        userId: row.userId,
-        discrepancyType: 'PAYOUT_PAYLOAD_MISMATCH',
-        amount: row.amount,
-        currency: expectedCurrency,
-        providerPayload: {
-          expectedAmount: row.amount,
-          expectedCurrency,
-          providedAmount: payload.amount ?? null,
-          providedCurrency: payload.currency ?? null,
-          status: payload.status ?? null,
-          providerRequestId: row.providerRequestId,
-        },
-        status: 'OPEN',
-      })
-      .onConflictDoNothing({
-        target: [
-          financialDiscrepancies.referenceType,
-          financialDiscrepancies.referenceId,
-          financialDiscrepancies.discrepancyType,
-        ],
-      });
-  }
-
-  private async _handleLateSuccessConflict(
-    tx: DbTransaction,
-    locked: WithdrawalEntity,
-    meta: { providerRefId: string | null; reason: string | null },
-  ): Promise<WithdrawalEntity> {
-    if (locked.lateSuccessConflict) {
-      return locked;
-    }
-
-    const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
-    const availableSpec = {
-      userId: locked.userId,
-      currency: ccy,
-      accountType: 'AVAILABLE' as const,
-    };
-    const receivableSpec = {
-      userId: locked.userId,
-      currency: ccy,
-      accountType: 'RECEIVABLE' as const,
-    };
-
-    await this._walletService.lockUserRestriction(tx, locked.userId);
-    const lockedAccounts = await this._walletService.lockUserAccountsCanonical(
-      tx,
-      [availableSpec, receivableSpec],
-    );
-    const userAvailable = this._walletService.getRequiredLockedAccount(
-      lockedAccounts,
-      availableSpec,
-    );
-    const userReceivable = this._walletService.getRequiredLockedAccount(
-      lockedAccounts,
-      receivableSpec,
-    );
-    const payoutClearing = await this._walletService.getSystemAccount(
-      tx,
-      'PAYOUT_CLEARING',
-      ccy,
+      `Payout payload mismatch for withdrawal=${row.id} req=${row.providerRequestId}; halting settlement and escalating to MANUAL_REVIEW`,
     );
 
-    const amountMinor = BigInt(locked.amount);
-    const feeMinor = BigInt(locked.fee);
-    const totalOutflow = amountMinor + feeMinor;
-    const currentAvailable = BigInt(userAvailable.balance ?? '0');
-    const clawback =
-      currentAvailable >= totalOutflow ? totalOutflow : currentAvailable;
-    const shortfall = totalOutflow - clawback;
+    return this._databaseService.runInTransaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(withdrawals)
+        .where(eq(withdrawals.id, row.id))
+        .for('update')
+        .limit(1);
 
-    const postings: LedgerPostingLine[] = [];
-    if (clawback > 0n) {
-      postings.push({
-        account: userAvailable,
-        direction: 'DEBIT',
-        amount: clawback,
-      });
-    }
-    if (shortfall > 0n) {
-      postings.push({
-        account: userReceivable,
-        direction: 'DEBIT',
-        amount: shortfall,
-      });
-    }
-    postings.push({
-      account: payoutClearing,
-      direction: 'CREDIT',
-      amount: amountMinor,
-    });
-    if (feeMinor > 0n) {
-      const feeRevenue = await this._walletService.getSystemAccount(
-        tx,
-        'FEE_REVENUE',
-        ccy,
-      );
-      postings.push({
-        account: feeRevenue,
-        direction: 'CREDIT',
-        amount: feeMinor,
-      });
-    }
-
-    await this._ledgerService.postTransaction(tx, {
-      type: 'WD_LATE_SUCCESS',
-      referenceType: 'WITHDRAWAL',
-      referenceId: locked.id,
-      description: `Late payout success conflict recovery (${locked.providerRequestId})`,
-      metadata: {
-        providerRefId: meta.providerRefId,
-        clawback: clawback.toString(),
-        shortfall: shortfall.toString(),
-      },
-      postings,
-    });
-
-    const now = new Date();
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
-        status: 'SUCCEEDED',
-        lateSuccessConflict: true,
-        providerRefId: meta.providerRefId ?? locked.providerRefId,
-        leaseUntil: null,
-        nextPollAt: null,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: now,
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
-
-    if (shortfall > 0n) {
+      const target = locked ?? row;
       await tx
-        .update(userRestrictions)
-        .set({
-          outboundFrozen: true,
-          freezeReason: `Unrecovered shortfall on late-succeeded withdrawal ${locked.id}`,
-          updatedAt: now,
+        .insert(financialDiscrepancies)
+        .values({
+          id: generateUuidV7(),
+          referenceType: 'WITHDRAWAL',
+          referenceId: target.id,
+          userId: target.userId,
+          discrepancyType: 'PAYOUT_PAYLOAD_MISMATCH',
+          amount: target.amount,
+          currency: expectedCurrency,
+          providerPayload: {
+            expectedAmount: target.amount,
+            expectedCurrency,
+            providedAmount: params.providedAmount,
+            providedCurrency: params.providedCurrency,
+            status: params.status,
+            providerRequestId: target.providerRequestId,
+          },
+          status: 'OPEN',
         })
-        .where(eq(userRestrictions.userId, locked.userId));
-    }
+        .onConflictDoNothing({
+          target: [
+            financialDiscrepancies.referenceType,
+            financialDiscrepancies.referenceId,
+            financialDiscrepancies.discrepancyType,
+          ],
+        });
 
-    await tx
-      .insert(financialDiscrepancies)
-      .values({
-        id: generateUuidV7(),
-        referenceType: 'WITHDRAWAL',
-        referenceId: locked.id,
-        userId: locked.userId,
-        discrepancyType: 'LATE_SUCCESS_CONFLICT',
-        amount: totalOutflow.toString(),
-        currency: ccy,
-        providerPayload: {
-          providerRequestId: locked.providerRequestId,
-          providerRefId: meta.providerRefId,
-          clawback: clawback.toString(),
-          shortfall: shortfall.toString(),
-        },
-        status: 'OPEN',
-      })
-      .onConflictDoNothing({
-        target: [
-          financialDiscrepancies.referenceType,
-          financialDiscrepancies.referenceId,
-          financialDiscrepancies.discrepancyType,
-        ],
-      });
+      if (
+        target.status === 'DISPATCHING' ||
+        target.status === 'PROCESSING' ||
+        target.status === 'MANUAL_REVIEW'
+      ) {
+        const [escalated] = await tx
+          .update(withdrawals)
+          .set({
+            status: 'MANUAL_REVIEW',
+            leaseUntil: null,
+            nextPollAt: null,
+            version: sql`${withdrawals.version} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(eq(withdrawals.id, target.id))
+          .returning();
+        return escalated ?? target;
+      }
 
-    return updated ?? locked;
+      return target;
+    });
   }
 
   private readonly _logger = new Logger(WithdrawalService.name);

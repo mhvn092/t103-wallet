@@ -578,6 +578,57 @@
         ]
       }
     },
+    "/internal/metrics/prometheus": {
+      "get": {
+        "operationId": "InternalOpsController_getPrometheusMetrics",
+        "parameters": [
+          {
+            "name": "X-Internal-Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text format 0.0.4 metrics",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Prometheus text exposition of wallet/ledger/outbox operational gauges",
+        "tags": [
+          "Internal Operations"
+        ]
+      }
+    },
     "/deposits": {
       "post": {
         "operationId": "DepositController_initiate",
@@ -908,6 +959,14 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -943,6 +1002,16 @@
           },
           "409": {
             "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business Rule Violation",
             "content": {
               "application/json": {
                 "schema": {
@@ -1016,6 +1085,132 @@
         "summary": "HMAC-SHA256 signed payout provider webhook callback",
         "tags": [
           "Payout Webhooks"
+        ]
+      }
+    },
+    "/internal/withdrawals/{id}/resolve": {
+      "post": {
+        "operationId": "InternalWithdrawalController_resolveManualReview",
+        "parameters": [
+          {
+            "name": "X-Internal-Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Operator-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithdrawalResolveDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Withdrawal resolved cleanly in double-entry ledger",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WithdrawalResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business Rule Violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Manually resolve a withdrawal in MANUAL_REVIEW as SUCCEEDED or FAILED",
+        "tags": [
+          "Internal Operations"
         ]
       }
     },
@@ -2002,6 +2197,33 @@
           "received"
         ]
       },
+      "WithdrawalResolveDto": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "SUCCEEDED",
+              "FAILED"
+            ],
+            "example": "SUCCEEDED"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Audit reason for manual review resolution",
+            "example": "Confirmed settled by bank operations desk"
+          },
+          "providerRefId": {
+            "type": "string",
+            "description": "Optional external bank/blockchain reference ID",
+            "example": "BANK-REF-OPS-101"
+          }
+        },
+        "required": [
+          "outcome",
+          "reason"
+        ]
+      },
       "TransferCreateDto": {
         "type": "object",
         "properties": {
@@ -2105,6 +2327,10 @@
             "type": "number",
             "example": 10
           },
+          "adjacentDayMatchedCount": {
+            "type": "number",
+            "example": 0
+          },
           "mismatchCount": {
             "type": "number",
             "example": 2
@@ -2118,6 +2344,7 @@
           "csvDepositCount",
           "localDepositCount",
           "matchedCount",
+          "adjacentDayMatchedCount",
           "mismatchCount",
           "duplicateCsvRowsIgnored"
         ]
@@ -2167,6 +2394,49 @@
           "details"
         ]
       },
+      "ReconciliationAdjacentDayMatchDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "example": "MATCHED_ADJACENT_DAY"
+          },
+          "reference": {
+            "type": "string",
+            "example": "1382264189"
+          },
+          "csvAmount": {
+            "type": "string",
+            "example": "50000"
+          },
+          "localAmount": {
+            "type": "string",
+            "example": "50000"
+          },
+          "depositId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "verifiedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "details": {
+            "type": "string",
+            "example": "CSV settlement row matched a SUCCEEDED deposit verified on an adjacent day within [-1d, +2d) cutoff window"
+          }
+        },
+        "required": [
+          "type",
+          "reference",
+          "csvAmount",
+          "localAmount",
+          "depositId",
+          "verifiedAt",
+          "details"
+        ]
+      },
       "ReconciliationResponseDto": {
         "type": "object",
         "properties": {
@@ -2181,6 +2451,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ReconciliationMismatchDto"
+            }
+          },
+          "adjacentDayMatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationAdjacentDayMatchDto"
             }
           }
         },

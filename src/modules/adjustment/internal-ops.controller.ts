@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Headers,
   HttpCode,
   HttpStatus,
@@ -13,11 +14,17 @@ import {
   ApiHeader,
   ApiOkResponse,
   ApiOperation,
+  ApiProduces,
   ApiTags,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
-import { RequireIdempotencyKey } from '../idempotency/idempotency.decorator.js';
+import {
+  IdempotencyRequestHash,
+  IdempotentRoute,
+  RequireIdempotencyKey,
+} from '../idempotency/idempotency.decorator.js';
+import { IdempotencyPreCheckGuard } from '../idempotency/idempotency.guard.js';
 import { InternalMetricsResponseDto } from './dto/internal-metrics-response.dto.js';
 import { ReceivableSettleResponseDto } from './dto/receivable-settle-response.dto.js';
 import { ReceivableSettleDto } from './dto/receivable-settle.dto.js';
@@ -34,6 +41,8 @@ export class InternalOpsController {
   constructor(private readonly _internalOpsService: InternalOpsService) {}
 
   @Post('receivables/settle')
+  @UseGuards(IdempotencyPreCheckGuard)
+  @IdempotentRoute('POST:/internal/receivables/settle')
   @ApiOperation({
     summary:
       'Settle outstanding USER:RECEIVABLE shortfall from USER:AVAILABLE and unfreeze when zero',
@@ -54,6 +63,7 @@ export class InternalOpsController {
   @HttpCode(HttpStatus.OK)
   async settleReceivable(
     @RequireIdempotencyKey() idempotencyKey: string,
+    @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: ReceivableSettleDto,
     @Headers('x-operator-id') rawOperatorId: string | undefined,
     @Res({ passthrough: true }) res: Response,
@@ -61,6 +71,7 @@ export class InternalOpsController {
     const operatorId = rawOperatorId?.trim() || 'system-ops';
     const result = await this._internalOpsService.settleReceivable({
       idempotencyKey,
+      requestHash,
       dto,
       operatorId,
     });
@@ -100,5 +111,22 @@ export class InternalOpsController {
   @ApiErrorResponses(HttpStatus.UNAUTHORIZED, HttpStatus.FORBIDDEN)
   getMetrics(): Promise<InternalMetricsResponseDto> {
     return this._internalOpsService.getMetrics();
+  }
+
+  @Get('metrics/prometheus')
+  @ApiOperation({
+    summary:
+      'Prometheus text exposition of wallet/ledger/outbox operational gauges',
+  })
+  @ApiProduces('text/plain')
+  @ApiOkResponse({
+    description: 'Prometheus text format 0.0.4 metrics',
+    type: String,
+  })
+  @ApiErrorResponses(HttpStatus.UNAUTHORIZED, HttpStatus.FORBIDDEN)
+  @Header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
+  async getPrometheusMetrics(): Promise<string> {
+    const metrics = await this._internalOpsService.getMetrics();
+    return this._internalOpsService.formatPrometheusMetrics(metrics);
   }
 }

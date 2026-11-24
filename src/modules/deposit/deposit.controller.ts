@@ -8,6 +8,7 @@ import {
   Post,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBody,
@@ -20,7 +21,12 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
-import { RequireIdempotencyKey } from '../idempotency/idempotency.decorator.js';
+import {
+  IdempotencyRequestHash,
+  IdempotentRoute,
+  RequireIdempotencyKey,
+} from '../idempotency/idempotency.decorator.js';
+import { IdempotencyPreCheckGuard } from '../idempotency/idempotency.guard.js';
 import { DepositService } from './deposit.service.js';
 import { DepositCreateDto } from './dto/deposit-create.dto.js';
 import { DepositPspCallbackDto } from './dto/deposit-psp-callback.dto.js';
@@ -36,6 +42,8 @@ export class DepositController {
   constructor(private readonly _depositService: DepositService) {}
 
   @Post('deposits')
+  @UseGuards(IdempotencyPreCheckGuard)
+  @IdempotentRoute('POST:/deposits')
   @ApiOperation({ summary: 'Initiate an IRT PSP deposit' })
   @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiCreatedResponse({
@@ -50,11 +58,13 @@ export class DepositController {
   )
   async initiate(
     @RequireIdempotencyKey() idempotencyKey: string,
+    @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: DepositCreateDto,
     @Res({ passthrough: true }) res: Response,
   ): Promise<DepositCreateResponseDto> {
     const result = await this._depositService.initiateDeposit({
       idempotencyKey,
+      requestHash,
       dto,
     });
     res.status(result.statusCode);

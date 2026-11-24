@@ -24,16 +24,26 @@ export class OutboxWorker extends IntervalWorkerBase {
     if (!this._configService.get('WORKERS_ENABLED', { infer: true })) {
       return;
     }
-    void this._amqpBrokerClient.startConsumer(async ({ eventId, payload }) => {
-      await this._balanceEventConsumerService.processEvent({
-        eventId,
-        consumerName: 't103-balance-audit-consumer',
-        payload,
-      });
-    });
+    void this._amqpBrokerClient.startConsumer(this._handleConsumedEvent);
   }
 
   protected async runTick(): Promise<void> {
+    try {
+      await this._amqpBrokerClient.startConsumer(this._handleConsumedEvent);
+    } catch {
+      // Non-blocking: publisher outbox relay still proceeds and next tick retries consumer attach
+    }
     await this._outboxPublisherService.publishPendingBatch();
   }
+
+  private readonly _handleConsumedEvent = async (msg: {
+    eventId: string;
+    payload: unknown;
+  }): Promise<void> => {
+    await this._balanceEventConsumerService.processEvent({
+      eventId: msg.eventId,
+      consumerName: 't103-balance-audit-consumer',
+      payload: msg.payload,
+    });
+  };
 }

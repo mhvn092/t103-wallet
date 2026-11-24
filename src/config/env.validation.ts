@@ -63,6 +63,10 @@ export const envSchema = z.object({
     emptyToUndefined,
     z.string().min(1).optional(),
   ),
+  ALLOW_UNAUTHENTICATED_INTERNAL_OPS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   READINESS_DB_TIMEOUT_MS: z.coerce
     .number()
     .int()

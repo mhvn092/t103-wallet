@@ -107,7 +107,7 @@ export function parseSettlementCsv(csvText: string): ParsedSettlementCsv {
       continue;
     }
 
-    const dedupKey = `${normalizedReference}|${txType}|${amountIrr.toString()}`;
+    const dedupKey = `${rowNumber}|${normalizedReference}|${txType}|${amountIrr.toString()}`;
     if (seenKeys.has(dedupKey)) {
       duplicateCount += 1;
       continue;

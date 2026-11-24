@@ -1,6 +1,16 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, asc, eq, inArray, isNotNull, lte, ne, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  ne,
+  sql,
+} from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -53,18 +63,20 @@ export class DepositService {
 
   async initiateDeposit(params: {
     idempotencyKey: string;
+    requestHash?: string;
     dto: DepositCreateDto;
   }): Promise<{
     replayed: boolean;
     statusCode: number;
     body: DepositCreateResponseDto;
   }> {
-    const scope = `POST:/deposits:${params.dto.userId}`;
+    const scope = 'POST:/deposits';
     const claim =
       await this._idempotencyService.claimLeased<DepositCreateResponseDto>({
         scope,
         key: params.idempotencyKey,
         requestBody: params.dto,
+        requestHashOverride: params.requestHash,
         leaseMs: this._getDepositInitLeaseMs(),
       });
     if (claim.kind === 'REPLAY') {
@@ -159,6 +171,10 @@ export class DepositService {
         depositId: row.id,
         status: row.status,
       };
+    }
+
+    if (!row.pspToken && token) {
+      await this._backfillMissingTokenFromPsp(row, token);
     }
 
     try {
@@ -392,7 +408,7 @@ export class DepositService {
     };
 
     await this._databaseService.runInTransaction(async (tx) => {
-      await tx
+      const updated = await tx
         .update(deposits)
         .set({
           status: 'AWAITING_PAYMENT',
@@ -410,7 +426,16 @@ export class DepositService {
             eq(deposits.id, params.depositId),
             eq(deposits.status, 'INITIATED'),
           ),
+        )
+        .returning({ id: deposits.id });
+
+      if (updated.length === 0) {
+        throw new DomainException(
+          HttpStatus.CONFLICT,
+          ErrorCode.IDEMPOTENCY_IN_PROGRESS,
+          'Deposit initiation lease expired before finalization',
         );
+      }
 
       await this._idempotencyService.completeLeased({
         scope: params.scope,
@@ -423,6 +448,43 @@ export class DepositService {
     });
 
     return body;
+  }
+
+  private async _backfillMissingTokenFromPsp(
+    row: DepositEntity,
+    callbackToken: string,
+  ): Promise<void> {
+    try {
+      const inquiry = await this._pspClient.getPaymentStatus(callbackToken);
+      if (inquiry.kind !== 'FOUND' || inquiry.orderId !== row.orderId) {
+        return;
+      }
+
+      const now = new Date();
+      await this._databaseService.db
+        .update(deposits)
+        .set({
+          pspToken: callbackToken,
+          nextPollAt: new Date(
+            now.getTime() + addJitterMs(DEPOSIT_POLL_BACKOFF_MS),
+          ),
+          version: sql`${deposits.version} + 1`,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(deposits.id, row.id),
+            isNull(deposits.pspToken),
+            ne(deposits.status, 'SUCCEEDED'),
+          ),
+        );
+    } catch (err) {
+      this._logger.warn(
+        `Failed to backfill pspToken on deposit=${row.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   private async _findDepositById(

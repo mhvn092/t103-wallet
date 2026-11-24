@@ -20,6 +20,7 @@ import { runMigrations } from '../src/database/migrate.js';
 import { AmqpBrokerClient } from '../src/modules/outbox/amqp-broker.client.js';
 import { BalanceEventConsumerService } from '../src/modules/outbox/balance-event-consumer.service.js';
 import { OutboxPublisherService } from '../src/modules/outbox/outbox-publisher.service.js';
+import { OutboxWorker } from '../src/modules/outbox/outbox.worker.js';
 import {
   assertGlobalFinancialInvariants,
   fundUserViaAdjustment,
@@ -165,5 +166,21 @@ describe('Transactional Outbox, Broker Outage Resilience & Idempotent Consumer (
       [eventId],
     );
     expect(rows).toHaveLength(1);
+  });
+
+  it('re-attempts AMQP consumer attach on OutboxWorker ticks after startup ECONNREFUSED (F-05)', async () => {
+    const outboxWorker = app.get(OutboxWorker);
+    mockBroker.startConsumer
+      .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+      .mockResolvedValue(undefined);
+
+    await (
+      outboxWorker as unknown as { runTick: () => Promise<void> }
+    ).runTick();
+    await (
+      outboxWorker as unknown as { runTick: () => Promise<void> }
+    ).runTick();
+
+    expect(mockBroker.startConsumer).toHaveBeenCalledTimes(2);
   });
 });

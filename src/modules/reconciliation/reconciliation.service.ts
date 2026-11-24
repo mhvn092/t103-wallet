@@ -7,6 +7,7 @@ import { DatabaseService } from '../../database/database.service.js';
 import { deposits } from '../../database/schema/index.js';
 import { PspClient } from '../providers/psp.client.js';
 import type {
+  ReconciliationAdjacentDayMatchDto,
   ReconciliationMismatchDto,
   ReconciliationResponseDto,
 } from './dto/reconciliation-response.dto.js';
@@ -45,19 +46,27 @@ export class ReconciliationService {
       2,
     );
 
+    const localForDateIds = new Set(localForDate.map((row) => row.id));
     const localByRef = this._groupDepositsByNormalizedRef(candidatePool);
     const consumedLocalIds = new Set<string>();
     const mismatches: ReconciliationMismatchDto[] = [];
+    const adjacentDayMatches: ReconciliationAdjacentDayMatchDto[] = [];
     let matchedCount = 0;
+    let adjacentDayMatchedCount = 0;
 
     for (const csvRow of parsedCsv.deposits) {
       const result = this._reconcileCsvRow(
         csvRow,
         localByRef,
         consumedLocalIds,
+        localForDateIds,
       );
       if (result.matched) {
         matchedCount += 1;
+      }
+      if (result.adjacentMatch) {
+        adjacentDayMatchedCount += 1;
+        adjacentDayMatches.push(result.adjacentMatch);
       }
       if (result.mismatch) {
         mismatches.push(result.mismatch);
@@ -77,10 +86,12 @@ export class ReconciliationService {
         csvDepositCount: parsedCsv.deposits.length,
         localDepositCount: localForDate.length,
         matchedCount,
+        adjacentDayMatchedCount,
         mismatchCount: mismatches.length,
         duplicateCsvRowsIgnored: parsedCsv.duplicateCount,
       },
       mismatches,
+      adjacentDayMatches,
     };
   }
 
@@ -90,12 +101,12 @@ export class ReconciliationService {
     endOffsetDaysExclusive: number,
   ): Promise<ReconciliationLocalDeposit[]> {
     const tz = this._configService.get('RECONCILIATION_TZ', { infer: true });
-    // Narrowed projection aligns with covering index deposits_verified_at_idx INCLUDE (id, psp_ref_id, verified_amount)
     return this._databaseService.db
       .select({
         id: deposits.id,
         pspRefId: deposits.pspRefId,
         verifiedAmount: deposits.verifiedAmount,
+        verifiedAt: deposits.verifiedAt,
       })
       .from(deposits)
       .where(
@@ -127,16 +138,34 @@ export class ReconciliationService {
   private _consumeMatchingCandidate(
     candidates: ReconciliationLocalDeposit[] | undefined,
     expectedAmountIrt: bigint,
+    localForDateIds: ReadonlySet<string>,
   ): ReconciliationLocalDeposit | undefined {
     if (!candidates || candidates.length === 0) {
       return undefined;
     }
-    const exactIndex = candidates.findIndex(
+
+    // Prefer exact-amount same-day matches first, then exact-amount adjacent-day, then same-day, then FIFO
+    const exactSameDay = candidates.findIndex(
+      (c) =>
+        localForDateIds.has(c.id) &&
+        BigInt(c.verifiedAmount ?? '0') === expectedAmountIrt,
+    );
+    if (exactSameDay >= 0) {
+      return candidates.splice(exactSameDay, 1)[0];
+    }
+
+    const exactAnyDay = candidates.findIndex(
       (c) => BigInt(c.verifiedAmount ?? '0') === expectedAmountIrt,
     );
-    if (exactIndex >= 0) {
-      return candidates.splice(exactIndex, 1)[0];
+    if (exactAnyDay >= 0) {
+      return candidates.splice(exactAnyDay, 1)[0];
     }
+
+    const sameDay = candidates.findIndex((c) => localForDateIds.has(c.id));
+    if (sameDay >= 0) {
+      return candidates.splice(sameDay, 1)[0];
+    }
+
     return candidates.shift();
   }
 
@@ -144,9 +173,18 @@ export class ReconciliationService {
     csvRow: CsvDepositRecord,
     localByRef: Map<string, ReconciliationLocalDeposit[]>,
     consumedLocalIds: Set<string>,
-  ): { matched: boolean; mismatch?: ReconciliationMismatchDto } {
+    localForDateIds: ReadonlySet<string>,
+  ): {
+    matched: boolean;
+    adjacentMatch?: ReconciliationAdjacentDayMatchDto;
+    mismatch?: ReconciliationMismatchDto;
+  } {
     const candidates = localByRef.get(csvRow.normalizedReference);
-    const match = this._consumeMatchingCandidate(candidates, csvRow.amountIrt);
+    const match = this._consumeMatchingCandidate(
+      candidates,
+      csvRow.amountIrt,
+      localForDateIds,
+    );
 
     if (csvRow.amountIrr <= 0n) {
       if (match) {
@@ -197,6 +235,23 @@ export class ReconciliationService {
           details: csvRow.hasIrrRemainder
             ? 'PSP settlement CSV IRR amount is not an exact multiple of 10'
             : 'PSP settlement CSV IRT amount differs from local verified deposit amount',
+        },
+      };
+    }
+
+    if (!localForDateIds.has(match.id)) {
+      const formattedAmount = formatMinorToApi(localIrt, 'IRT');
+      return {
+        matched: true,
+        adjacentMatch: {
+          type: 'MATCHED_ADJACENT_DAY',
+          reference: csvRow.normalizedReference,
+          csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
+          localAmount: formattedAmount,
+          depositId: match.id,
+          verifiedAt: match.verifiedAt ? match.verifiedAt.toISOString() : null,
+          details:
+            'CSV settlement row matched a SUCCEEDED deposit verified on an adjacent day within [-1d, +2d) cutoff window',
         },
       };
     }

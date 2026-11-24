@@ -28,9 +28,13 @@ export class DriftAuditWorker extends IntervalWorkerBase {
     const driftCount =
       await this._internalOpsService.refreshBalanceDriftGauge();
     if (driftCount > 0) {
-      this._auditLogger.warn(
-        `Balance drift detected on ${driftCount} USER account(s)`,
+      this._auditLogger.error(
+        `CRITICAL: Balance drift detected on ${driftCount} USER account(s); tripping automatic withdrawal pause circuit breaker`,
       );
+      await this._internalOpsService.setPausedWithdrawals({
+        currencies: ['IRT', 'USDT'],
+        reason: `AUTO_CIRCUIT_BREAKER: balance drift detected on ${driftCount} USER account(s)`,
+      });
     }
   }
 

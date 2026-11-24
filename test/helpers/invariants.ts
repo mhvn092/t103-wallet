@@ -84,13 +84,26 @@ export async function assertGlobalFinancialInvariants(
     expect(acc.balance).toBe(computedByAccount.get(acc.id) ?? 0n);
   }
 
-  // 4. Daily limit usage bounds
-  const { rows: limitRows } = await pool.query<{ used_irt_amount: string }>(
-    `SELECT used_irt_amount FROM user_daily_limits`,
-  );
+  // 4. Daily limit usage bounds (allowing explicit non-released WD_LATE_SUCCESS quota restoration)
+  const { rows: limitRows } = await pool.query<{
+    used_irt_amount: string;
+    late_success_irt: string;
+  }>(`
+    SELECT
+      udl.used_irt_amount,
+      COALESCE(SUM(w.irt_equivalent), 0)::text AS late_success_irt
+    FROM user_daily_limits udl
+    LEFT JOIN withdrawals w
+      ON w.user_id = udl.user_id
+      AND w.limit_date = udl.limit_date
+      AND w.late_success_conflict = true
+      AND w.quota_released = false
+    GROUP BY udl.user_id, udl.limit_date, udl.used_irt_amount
+  `);
   for (const limitRow of limitRows) {
     const used = BigInt(limitRow.used_irt_amount);
-    expect(used >= 0n && used <= dailyLimitIrt).toBe(true);
+    const lateExtra = BigInt(limitRow.late_success_irt);
+    expect(used >= 0n && used <= dailyLimitIrt + lateExtra).toBe(true);
   }
 }
 

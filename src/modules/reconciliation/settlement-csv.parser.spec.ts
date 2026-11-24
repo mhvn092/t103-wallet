@@ -40,6 +40,20 @@ describe('settlement-csv.parser', () => {
     expect(parsed.deposits[3]?.amountIrt).toBe(310_000n);
   });
 
+  it('preserves distinct rowNumber lines sharing (reference, txType, amount) while deduplicating identical rows (F-10)', () => {
+    const csv = [
+      'ردیف,تاریخ,شماره پیگیری,نوع تراکنش,مبلغ (ریال),شرح',
+      '1,1405/09/03,111222333,واریز درگاه,"500,000",اولین تراکنش',
+      '2,1405/09/03,111222333,واریز درگاه,"500,000",تراکنش دوم مجزا با شماره پیگیری یکسان',
+      '2,1405/09/03,111222333,واریز درگاه,"500,000",تراکنش دوم مجزا با شماره پیگیری یکسان',
+    ].join('\r\n');
+
+    const parsed = parseSettlementCsv(csv);
+    expect(parsed.duplicateCount).toBe(1);
+    expect(parsed.deposits).toHaveLength(2);
+    expect(parsed.deposits.map((d) => d.rowNumber)).toEqual(['1', '2']);
+  });
+
   it('preserves leading-zero stripping idempotence and Persian/ASCII IRR->IRT arithmetic across arbitrary values', () => {
     fc.assert(
       fc.property(

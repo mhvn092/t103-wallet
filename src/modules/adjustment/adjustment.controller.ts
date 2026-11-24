@@ -15,7 +15,12 @@ import {
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
-import { RequireIdempotencyKey } from '../idempotency/idempotency.decorator.js';
+import {
+  IdempotencyRequestHash,
+  IdempotentRoute,
+  RequireIdempotencyKey,
+} from '../idempotency/idempotency.decorator.js';
+import { IdempotencyPreCheckGuard } from '../idempotency/idempotency.guard.js';
 import { AdjustmentService } from './adjustment.service.js';
 import { AdjustmentCreateDto } from './dto/adjustment-create.dto.js';
 import { AdjustmentResponseDto } from './dto/adjustment-response.dto.js';
@@ -28,6 +33,8 @@ export class AdjustmentController {
   constructor(private readonly _adjustmentService: AdjustmentService) {}
 
   @Post()
+  @UseGuards(IdempotencyPreCheckGuard)
+  @IdempotentRoute('POST:/internal/adjustments')
   @ApiOperation({
     summary: 'Manually credit a user wallet with double-entry audit trail',
   })
@@ -47,6 +54,7 @@ export class AdjustmentController {
   )
   async create(
     @RequireIdempotencyKey() idempotencyKey: string,
+    @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: AdjustmentCreateDto,
     @Headers('x-operator-id') rawOperatorId: string | undefined,
     @Res({ passthrough: true }) res: Response,
@@ -54,6 +62,7 @@ export class AdjustmentController {
     const operatorId = rawOperatorId?.trim() || 'system-ops';
     const result = await this._adjustmentService.createAdjustment({
       idempotencyKey,
+      requestHash,
       dto,
       operatorId,
     });

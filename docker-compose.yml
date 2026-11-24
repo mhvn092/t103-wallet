@@ -51,6 +51,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
       simulator:
         condition: service_started
     ports:
@@ -58,6 +60,8 @@ services:
     environment:
       NODE_ENV: production
       APP_ENV: ${APP_ENV:-local}
+      # Explicitly opt in only for local Compose Appendix A runs; NEVER set true in deployed production
+      ALLOW_UNAUTHENTICATED_INTERNAL_OPS: ${ALLOW_UNAUTHENTICATED_INTERNAL_OPS:-true}
       SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
       PORT: 3000
       MIGRATION_DATABASE_URI: postgresql://${POSTGRES_USER:-t103}:${POSTGRES_PASSWORD:-t103}@postgres:5432/${POSTGRES_DB:-t103_wallet}

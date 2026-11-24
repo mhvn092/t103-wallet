@@ -23,4 +23,6 @@ export const payoutInquirySchema = z.object({
   refId: z.string().nullish(),
   reason: z.string().nullish(),
   failureReason: z.string().nullish(),
+  amount: z.union([z.string(), z.number()]).nullish(),
+  currency: z.string().nullish(),
 });

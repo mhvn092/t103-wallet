@@ -30,7 +30,8 @@ Even with strict rules, an external provider bug or premature Ops override could
      - `CREDIT SYSTEM:PAYOUT_CLEARING` by `amount`
      - `CREDIT SYSTEM:FEE_REVENUE` by `fee` *(if `> 0`)*
 3. **Contain Further Drain (`outbound_frozen` + Triage Alert):**
-   - Set `withdrawals.late_success_conflict = true` and `status = 'SUCCEEDED'` (preserving previously refunded daily limit state so historical quota invariants remain non-negative and bounded).
+   - Set `withdrawals.late_success_conflict = true`, `status = 'SUCCEEDED'`, and `quota_released = false` (atomically restoring `irt_equivalent` into `user_daily_limits` under Canonical Lock Order so same-day `200M` cap cannot be bypassed even when `shortfall = 0`).
+   - Require authoritative `GET /payout/transfers/{provider_request_id}` verification before triggering `WD_LATE_SUCCESS` from a webhook, and block `WD_LATE_SUCCESS` whenever `terminal_return = true` (e.g., out-of-order `RETURNED -> SUCCEEDED` arrivals).
    - When `shortfall > 0`, set **`user_restrictions.outbound_frozen = true`**, blocking **both** `POST /withdrawals` and `POST /transfers` (`403 OUTBOUND_FROZEN`) so the user cannot drain funds while owing `RECEIVABLE`.
    - Create an `OPEN` **`LATE_SUCCESS_CONFLICT`** record in `financial_discrepancies` for Operations/Risk recovery.
 

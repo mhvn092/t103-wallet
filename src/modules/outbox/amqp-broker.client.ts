@@ -15,6 +15,8 @@ import {
   OUTBOX_QUEUE,
 } from './outbox.constants.js';
 
+const UNAVAILABLE_LOG_INTERVAL_MS = 30_000;
+
 @Injectable()
 export class AmqpBrokerClient implements OnModuleDestroy {
   constructor(
@@ -45,26 +47,65 @@ export class AmqpBrokerClient implements OnModuleDestroy {
   async startConsumer(
     handler: (msg: { eventId: string; payload: unknown }) => Promise<void>,
   ): Promise<void> {
-    try {
-      const conn = await this._ensureConnection();
-      const ch = await conn.createChannel();
-      await this._assertTopology(ch);
-      await ch.prefetch(10);
-      await ch.consume(OUTBOX_QUEUE, (rawMsg) => {
-        if (!rawMsg) {
+    if (this._destroyed || this._consumerChannel !== null) {
+      return;
+    }
+    if (this._consumerStartInFlight) {
+      return this._consumerStartInFlight;
+    }
+
+    const promise = (async () => {
+      try {
+        const conn = await this._ensureConnection();
+        if (this._destroyed || this._consumerChannel !== null) {
           return;
         }
-        void this._handleDelivery(ch, rawMsg, handler);
-      });
-      this._consumerChannel = ch;
-    } catch (err) {
-      this._logger.warn(
-        `AMQP consumer unavailable at startup (non-blocking): ${sanitizeBrokerError(err)}`,
-      );
-    }
+        const ch = await conn.createChannel();
+        ch.on('error', (err) => {
+          this._logger.warn(
+            `AMQP consumer channel error: ${sanitizeBrokerError(err)}`,
+          );
+          if (this._consumerChannel === ch) {
+            this._consumerChannel = null;
+          }
+        });
+        ch.on('close', () => {
+          if (this._consumerChannel === ch) {
+            this._consumerChannel = null;
+          }
+        });
+        await this._assertTopology(ch);
+        await ch.prefetch(10);
+        await ch.consume(OUTBOX_QUEUE, (rawMsg) => {
+          if (!rawMsg) {
+            return;
+          }
+          void this._handleDelivery(ch, rawMsg, handler);
+        });
+        this._consumerChannel = ch;
+      } catch (err) {
+        this._consumerChannel = null;
+        const nowMs = Date.now();
+        if (
+          nowMs - this._lastUnavailableLogAtMs >=
+          UNAVAILABLE_LOG_INTERVAL_MS
+        ) {
+          this._lastUnavailableLogAtMs = nowMs;
+          this._logger.warn(
+            `AMQP consumer unavailable (will retry): ${sanitizeBrokerError(err)}`,
+          );
+        }
+      } finally {
+        this._consumerStartInFlight = null;
+      }
+    })();
+
+    this._consumerStartInFlight = promise;
+    return promise;
   }
 
   async onModuleDestroy(): Promise<void> {
+    this._destroyed = true;
     await this._closeQuietly();
   }
 
@@ -72,18 +113,35 @@ export class AmqpBrokerClient implements OnModuleDestroy {
     if (this._connection) {
       return this._connection;
     }
-    const uri = this._configService.get('RABBITMQ_URI', { infer: true });
-    const conn = await connect(uri, { timeout: 5_000 });
-    conn.on('error', (err) => {
-      this._logger.warn(`AMQP connection error: ${sanitizeBrokerError(err)}`);
-    });
-    conn.on('close', () => {
-      this._connection = null;
-      this._publishChannel = null;
-      this._consumerChannel = null;
-    });
-    this._connection = conn;
-    return conn;
+    if (this._connectInFlight) {
+      return this._connectInFlight;
+    }
+
+    const promise = (async () => {
+      try {
+        const uri = this._configService.get('RABBITMQ_URI', { infer: true });
+        const conn = await connect(uri, { timeout: 5_000 });
+        conn.on('error', (err) => {
+          this._logger.warn(
+            `AMQP connection error: ${sanitizeBrokerError(err)}`,
+          );
+        });
+        conn.on('close', () => {
+          if (this._connection === conn) {
+            this._connection = null;
+            this._publishChannel = null;
+            this._consumerChannel = null;
+          }
+        });
+        this._connection = conn;
+        return conn;
+      } finally {
+        this._connectInFlight = null;
+      }
+    })();
+
+    this._connectInFlight = promise;
+    return promise;
   }
 
   private async _ensurePublishChannel(): Promise<ConfirmChannel> {
@@ -92,6 +150,19 @@ export class AmqpBrokerClient implements OnModuleDestroy {
     }
     const conn = await this._ensureConnection();
     const channel = await conn.createConfirmChannel();
+    channel.on('error', (err) => {
+      this._logger.warn(
+        `AMQP publish channel error: ${sanitizeBrokerError(err)}`,
+      );
+      if (this._publishChannel === channel) {
+        this._publishChannel = null;
+      }
+    });
+    channel.on('close', () => {
+      if (this._publishChannel === channel) {
+        this._publishChannel = null;
+      }
+    });
     await this._assertTopology(channel);
     this._publishChannel = channel;
     return channel;
@@ -153,8 +224,12 @@ export class AmqpBrokerClient implements OnModuleDestroy {
     await conn?.close().catch(() => undefined);
   }
 
+  private _destroyed = false;
   private _connection: ChannelModel | null = null;
   private _publishChannel: ConfirmChannel | null = null;
   private _consumerChannel: Channel | null = null;
+  private _connectInFlight: Promise<ChannelModel> | null = null;
+  private _consumerStartInFlight: Promise<void> | null = null;
+  private _lastUnavailableLogAtMs = 0;
   private readonly _logger = new Logger(AmqpBrokerClient.name);
 }

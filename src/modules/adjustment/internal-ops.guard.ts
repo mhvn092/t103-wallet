@@ -27,8 +27,17 @@ export class InternalOpsGuard implements CanActivate {
       infer: true,
     });
     const appEnv = this._configService.get('APP_ENV', { infer: true });
+    const nodeEnv = this._configService.get('NODE_ENV', { infer: true });
+    const allowUnauthInternalOps =
+      this._configService.get('ALLOW_UNAUTHENTICATED_INTERNAL_OPS', {
+        infer: true,
+      }) ?? false;
 
-    if (appEnv === 'production' && !expectedKey) {
+    if (
+      !expectedKey &&
+      (appEnv === 'production' ||
+        (nodeEnv === 'production' && !allowUnauthInternalOps))
+    ) {
       throw new DomainException(
         HttpStatus.FORBIDDEN,
         ErrorCode.FORBIDDEN,

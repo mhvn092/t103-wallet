@@ -114,6 +114,8 @@ export class PayoutClient {
       status: parsed.data.status,
       providerRefId: parsed.data.refId ?? parsed.data.trackingId ?? null,
       failureReason: parsed.data.reason ?? parsed.data.failureReason ?? null,
+      amount: parsed.data.amount ?? null,
+      currency: parsed.data.currency ?? null,
     };
   }
 }

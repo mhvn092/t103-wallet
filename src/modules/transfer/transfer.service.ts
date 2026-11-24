@@ -24,6 +24,7 @@ export class TransferService {
 
   async createTransfer(params: {
     idempotencyKey: string;
+    requestHash?: string;
     dto: TransferCreateDto;
   }): Promise<IdempotentExecutionResult<TransferResponseDto>> {
     const { dto } = params;
@@ -44,9 +45,10 @@ export class TransferService {
     });
 
     return this._idempotencyService.executeInTransaction<TransferResponseDto>({
-      scope: `POST:/transfers:${dto.fromUserId}`,
+      scope: 'POST:/transfers',
       key: params.idempotencyKey,
       requestBody: dto,
+      requestHashOverride: params.requestHash,
       handler: async (tx) => {
         if (dto.fromUserId === dto.toUserId) {
           throw new DomainException(

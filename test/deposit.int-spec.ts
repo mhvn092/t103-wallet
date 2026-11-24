@@ -602,37 +602,39 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
     const userB = `ub_${faker.string.alphanumeric(6)}`;
     const sharedKey = `dep-shared-${faker.string.uuid()}`;
 
-    // F-06: Two distinct users with identical Idempotency-Key both succeed
+    // F-06: Route-scoped Idempotency-Key returns 422 IDEMPOTENCY_KEY_REUSED across different users & invalid/extra payloads before ValidationPipe
     mockPspClient.createPayment.mockResolvedValueOnce({
       token: `tok_ua_${faker.string.alphanumeric(6)}`,
       paymentUrl: 'http://psp.local/pay/ua',
       expiresAt: new Date(Date.now() + 300_000),
     });
-    const depA = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post('/deposits')
       .set('Idempotency-Key', sharedKey)
       .send({ userId: userA, amount: '50000' })
       .expect(201);
 
-    mockPspClient.createPayment.mockResolvedValueOnce({
-      token: `tok_ub_${faker.string.alphanumeric(6)}`,
-      paymentUrl: 'http://psp.local/pay/ub',
-      expiresAt: new Date(Date.now() + 300_000),
-    });
-    const depB = await request(app.getHttpServer())
+    const diffUserReuse = await request(app.getHttpServer())
       .post('/deposits')
       .set('Idempotency-Key', sharedKey)
       .send({ userId: userB, amount: '50000' })
-      .expect(201);
-    expect(depB.body.depositId).not.toBe(depA.body.depositId);
+      .expect(422);
+    expect(diffUserReuse.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
 
-    // Reusing committed key with invalid amount still returns 422 IDEMPOTENCY_KEY_REUSED (not 400)
+    // Reusing committed key with invalid amount, numeric amount, or extra property returns 422 IDEMPOTENCY_KEY_REUSED (not 400)
     const reuseInvalid = await request(app.getHttpServer())
       .post('/deposits')
       .set('Idempotency-Key', sharedKey)
       .send({ userId: userA, amount: 'not-a-number' })
       .expect(422);
     expect(reuseInvalid.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    const reuseExtraProp = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', sharedKey)
+      .send({ userId: userA, amount: 50000, extraField: true })
+      .expect(422);
+    expect(reuseExtraProp.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
 
     // F-09: Overflow magnitude rejected with 400 INVALID_REQUEST
     const overflow = await request(app.getHttpServer())
@@ -696,6 +698,126 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
       .send({ userId: userA, amount: '70000' })
       .expect(201);
     expect(replayWin.body.depositId).toBe(req2Res.body.depositId);
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
+
+  it('rejects 0-row _finalizeAwaitingDeposit with 409 when poller expires INITIATED, and backfills pspToken on verified callback (F-02)', async () => {
+    const userId = `user_f02_${faker.string.alphanumeric(6)}`;
+    const stallKey = `dep-f02-stall-${faker.string.uuid()}`;
+
+    let markPspEntered!: () => void;
+    const pspEntered = new Promise<void>((resolve) => {
+      markPspEntered = resolve;
+    });
+    let releasePsp!: () => void;
+    const pspBarrier = new Promise<void>((resolve) => {
+      releasePsp = resolve;
+    });
+
+    mockPspClient.createPayment.mockImplementationOnce(async () => {
+      markPspEntered();
+      await pspBarrier;
+      return {
+        token: `tok_late_stall_${faker.string.alphanumeric(6)}`,
+        paymentUrl: 'http://psp.local/pay/stalled',
+        expiresAt: new Date(Date.now() + 300_000),
+      };
+    });
+
+    const stalledReq = request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', stallKey)
+      .send({ userId, amount: '90000' })
+      .then((r) => r);
+
+    await pspEntered;
+
+    // Backdate INITIATED deposit past orphan age and run verifyDeposit (poller) -> marks FAILED
+    const { rows: initRows } = await database.pool.query<{ id: string }>(
+      `SELECT id FROM deposits WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [userId],
+    );
+    const stalledDepId = initRows[0]!.id;
+    await database.pool.query(
+      `UPDATE deposits SET created_at = NOW() - INTERVAL '90 seconds' WHERE id = $1`,
+      [stalledDepId],
+    );
+    const expiredView = await depositService.verifyDeposit(stalledDepId);
+    expect(expiredView.status).toBe('FAILED');
+
+    // Now release PSP createPayment -> _finalizeAwaitingDeposit hits 0 rows and MUST return 409 (never 201 with psp_token=NULL)
+    releasePsp();
+    const stalledRes = await stalledReq;
+    expect(stalledRes.status).toBe(409);
+    expect(stalledRes.body.code).toBe('IDEMPOTENCY_IN_PROGRESS');
+
+    const { rows: dbRowAfter } = await database.pool.query<{
+      status: string;
+      psp_token: string | null;
+      order_id: string;
+    }>(`SELECT status, psp_token, order_id FROM deposits WHERE id = $1`, [
+      stalledDepId,
+    ]);
+    expect(dbRowAfter[0]?.status).toBe('FAILED');
+    expect(dbRowAfter[0]?.psp_token).toBeNull();
+
+    // Forged callback with mismatched orderId must NOT backfill psp_token
+    const badToken = `tok_bad_order_${faker.string.alphanumeric(6)}`;
+    mockPspClient.getPaymentStatus.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'PAID',
+      amountIrt: 90_000n,
+      refId: 'REF-BAD',
+      orderId: 'dep_someone_else',
+    });
+    await request(app.getHttpServer())
+      .post('/webhooks/psp/callback')
+      .send({ token: badToken, orderId: dbRowAfter[0]!.order_id, status: 'OK' })
+      .expect(200);
+
+    const { rows: stillNullRows } = await database.pool.query<{
+      psp_token: string | null;
+    }>(`SELECT psp_token FROM deposits WHERE id = $1`, [stalledDepId]);
+    expect(stillNullRows[0]?.psp_token).toBeNull();
+
+    // Legitimate callback with matching orderId verified via PSP inquiry backfills psp_token and settles deposit
+    const validToken = `tok_recover_${faker.string.alphanumeric(6)}`;
+    mockPspClient.getPaymentStatus
+      .mockResolvedValueOnce({
+        kind: 'FOUND',
+        status: 'PAID',
+        amountIrt: 90_000n,
+        refId: 'REF-BACKFILL',
+        orderId: dbRowAfter[0]!.order_id,
+      })
+      .mockResolvedValueOnce({
+        kind: 'FOUND',
+        status: 'PAID',
+        amountIrt: 90_000n,
+        refId: 'REF-BACKFILL',
+        orderId: dbRowAfter[0]!.order_id,
+      });
+    mockPspClient.verifyPayment.mockResolvedValueOnce({
+      kind: 'VERIFIED',
+      amountIrt: 90_000n,
+      refId: 'REF-BACKFILL',
+    });
+
+    const recoveredCb = await request(app.getHttpServer())
+      .post('/webhooks/psp/callback')
+      .send({
+        token: validToken,
+        orderId: dbRowAfter[0]!.order_id,
+        status: 'OK',
+      })
+      .expect(200);
+    expect(recoveredCb.body.status).toBe('SUCCEEDED');
+
+    const walletRes = await request(app.getHttpServer())
+      .get(`/wallets/${userId}`)
+      .expect(200);
+    expect(walletRes.body.balances[0].available).toBe('90000');
 
     await assertGlobalFinancialInvariants(database.pool);
   });

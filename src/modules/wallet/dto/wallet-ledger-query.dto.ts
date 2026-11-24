@@ -1,13 +1,34 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsIn, IsInt, Matches, Max, Min, ValidateIf } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  Max,
+  Min,
+  Validate,
+  ValidateIf,
+  ValidatorConstraint,
+  type ValidatorConstraintInterface,
+} from 'class-validator';
 import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
 import { emptyToUndefined } from '../../../common/utils/string-normalizer.util.js';
 import {
   WALLET_ACCOUNT_FILTERS,
+  isValidPositiveBigIntCursor,
   parseStrictLimit,
 } from '../wallet-ledger-query.util.js';
 import type { UserAccountType } from '../wallet.types.js';
+
+@ValidatorConstraint({ name: 'positiveBigIntCursor', async: false })
+class PositiveBigIntCursorConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return isValidPositiveBigIntCursor(value);
+  }
+
+  defaultMessage(): string {
+    return 'cursor must be a positive 64-bit integer ledger item ID';
+  }
+}
 
 export class WalletLedgerQueryDto {
   @ApiPropertyOptional({
@@ -28,9 +49,7 @@ export class WalletLedgerQueryDto {
   })
   @Transform(({ value }) => emptyToUndefined(value))
   @ValidateIf((o: WalletLedgerQueryDto) => o.cursor !== undefined)
-  @Matches(/^[1-9]\d*$/, {
-    message: 'cursor must be a positive integer ledger item ID',
-  })
+  @Validate(PositiveBigIntCursorConstraint)
   cursor?: string;
 
   @ApiPropertyOptional({

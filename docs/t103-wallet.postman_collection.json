@@ -146,6 +146,23 @@
           }
         },
         {
+          "name": "Resolve MANUAL_REVIEW Withdrawal",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" },
+              { "key": "X-Operator-Id", "value": "ops-ehsan" },
+              { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"outcome\": \"SUCCEEDED\",\n  \"reason\": \"Confirmed settled by bank operations\",\n  \"providerRefId\": \"BANK-REF-MANUAL-1\"\n}"
+            },
+            "url": "{{baseUrl}}/internal/withdrawals/{{withdrawalId}}/resolve"
+          }
+        },
+        {
           "name": "Get Internal Operational Metrics",
           "request": {
             "method": "GET",
@@ -153,6 +170,16 @@
               { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
             ],
             "url": "{{baseUrl}}/internal/metrics"
+          }
+        },
+        {
+          "name": "Get Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
+            ],
+            "url": "{{baseUrl}}/internal/metrics/prometheus"
           }
         }
       ]
@@ -260,6 +287,9 @@
           "name": "Cancel Pending Withdrawal",
           "request": {
             "method": "POST",
+            "header": [
+              { "key": "Idempotency-Key", "value": "{{$guid}}" }
+            ],
             "url": "{{baseUrl}}/withdrawals/{{withdrawalId}}/cancel"
           }
         },

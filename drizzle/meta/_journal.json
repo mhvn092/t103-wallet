@@ -36,6 +36,13 @@
       "when": 1795540000000,
       "tag": "0004_optimize_covering_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795550000000,
+      "tag": "0005_ledger_item_balance_trigger_and_terminal_return",
+      "breakpoints": true
     }
   ]
 }

@@ -148,9 +148,11 @@ describe('Daily PSP Settlement Reconciliation (Integration)', () => {
       csvDepositCount: 3,
       localDepositCount: 3,
       matchedCount: 1,
+      adjacentDayMatchedCount: 0,
       mismatchCount: 3,
       duplicateCsvRowsIgnored: 1,
     });
+    expect(res.body.adjacentDayMatches).toEqual([]);
     expect(res.body.mismatches).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -218,6 +220,7 @@ describe('Daily PSP Settlement Reconciliation (Integration)', () => {
       csvDepositCount: 3,
       localDepositCount: 1,
       matchedCount: 1,
+      adjacentDayMatchedCount: 0,
       mismatchCount: 2,
       duplicateCsvRowsIgnored: 0,
     });
@@ -235,6 +238,71 @@ describe('Daily PSP Settlement Reconciliation (Integration)', () => {
         }),
       ]),
     );
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
+
+  it('surfaces adjacent-day cutoff matches explicitly and preserves distinct rowNumber CSV entries (F-10)', async () => {
+    const userId = `rec_adj_${faker.string.alphanumeric(6)}`;
+    const midnightDepId = await seedSucceededDeposit({
+      userId,
+      amountIrt: 80_000n,
+      refId: '123450001',
+      token: `tok_adj_${faker.string.alphanumeric(6)}`,
+    });
+    const sameDayDepA = await seedSucceededDeposit({
+      userId,
+      amountIrt: 50_000n,
+      refId: '555666777',
+      token: `tok_sd_a_${faker.string.alphanumeric(6)}`,
+    });
+    const sameDayDepB = await seedSucceededDeposit({
+      userId,
+      amountIrt: 50_000n,
+      refId: '555666777',
+      token: `tok_sd_b_${faker.string.alphanumeric(6)}`,
+    });
+
+    await database.pool.query(
+      `UPDATE deposits SET verified_at = '2026-11-23T23:59:30Z' WHERE id = $1`,
+      [midnightDepId],
+    );
+    await database.pool.query(
+      `UPDATE deposits SET verified_at = '2026-11-24T12:00:00Z' WHERE id = ANY($1::uuid[])`,
+      [[sameDayDepA, sameDayDepB]],
+    );
+
+    mockPspClient.fetchSettlementCsv.mockResolvedValueOnce(
+      [
+        'ردیف,تاریخ,شماره پیگیری,نوع تراکنش,مبلغ (ریال),شرح',
+        '1,۱۴۰۵/۰۹/۰۳,000123450001,واریز درگاه,"800,000",تسویه نیمه‌شب',
+        '2,۱۴۰۵/۰۹/۰۳,555666777,واریز درگاه,"500,000",اولین تراکنش با مرجع مشترک',
+        '3,۱۴۰۵/۰۹/۰۳,555666777,واریز درگاه,"500,000",دومین تراکنش با ردیف متفاوت',
+      ].join('\r\n'),
+    );
+
+    const res = await request(app.getHttpServer())
+      .post('/reconciliation/run')
+      .send({ date: '2026-11-24' })
+      .expect(200);
+
+    expect(res.body.summary).toEqual({
+      csvDepositCount: 3,
+      localDepositCount: 2,
+      matchedCount: 3,
+      adjacentDayMatchedCount: 1,
+      mismatchCount: 0,
+      duplicateCsvRowsIgnored: 0,
+    });
+    expect(res.body.adjacentDayMatches).toEqual([
+      expect.objectContaining({
+        type: 'MATCHED_ADJACENT_DAY',
+        reference: '123450001',
+        csvAmount: '80000',
+        localAmount: '80000',
+        depositId: midnightDepId,
+      }),
+    ]);
 
     await assertGlobalFinancialInvariants(database.pool);
   });

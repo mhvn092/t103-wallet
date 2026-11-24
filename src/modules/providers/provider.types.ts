@@ -34,6 +34,8 @@ export type PayoutTransferStatusResult =
       status: PayoutStatusValue;
       providerRefId: string | null;
       failureReason: string | null;
+      amount?: string | number | null;
+      currency?: string | null;
     }
   | { kind: 'NOT_FOUND' }
   | { kind: 'AMBIGUOUS'; reason: string };
