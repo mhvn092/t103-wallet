@@ -35,7 +35,11 @@ export class PayoutWebhookController {
     description: 'Webhook verified and processed',
     type: WithdrawalWebhookAckDto,
   })
-  @ApiErrorResponses(HttpStatus.BAD_REQUEST, HttpStatus.UNAUTHORIZED)
+  @ApiErrorResponses(
+    HttpStatus.BAD_REQUEST,
+    HttpStatus.UNAUTHORIZED,
+    HttpStatus.SERVICE_UNAVAILABLE,
+  )
   @HttpCode(HttpStatus.OK)
   handleWebhook(
     @Req() req: RawBodyRequest<Request>,

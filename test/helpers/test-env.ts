@@ -12,6 +12,7 @@ export function getRequiredTestDatabaseUri(): string {
 }
 
 export function prepareTestEnv(): void {
+  process.env.ALLOW_UNAUTHENTICATED_INTERNAL_OPS ??= 'true';
   if (!process.env.WEBHOOK_SECRET) {
     process.env.WEBHOOK_SECRET = randomBytes(24).toString('hex');
   }

@@ -42,7 +42,7 @@ export class InternalOpsController {
 
   @Post('receivables/settle')
   @UseGuards(IdempotencyPreCheckGuard)
-  @IdempotentRoute('POST:/internal/receivables/settle')
+  @IdempotentRoute('POST:/internal/receivables/settle', { userField: 'userId' })
   @ApiOperation({
     summary:
       'Settle outstanding USER:RECEIVABLE shortfall from USER:AVAILABLE and unfreeze when zero',
@@ -80,6 +80,9 @@ export class InternalOpsController {
   }
 
   @Post('controls/withdrawals-pause')
+  @IdempotentRoute('POST:/internal/controls/withdrawals-pause')
+  @UseGuards(IdempotencyPreCheckGuard)
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiOperation({
     summary: 'Pause or resume outbound withdrawals per currency at runtime',
   })
@@ -91,12 +94,23 @@ export class InternalOpsController {
     HttpStatus.BAD_REQUEST,
     HttpStatus.UNAUTHORIZED,
     HttpStatus.FORBIDDEN,
+    HttpStatus.CONFLICT,
+    HttpStatus.UNPROCESSABLE_ENTITY,
   )
   @HttpCode(HttpStatus.OK)
-  pauseWithdrawals(
+  async pauseWithdrawals(
+    @RequireIdempotencyKey() idempotencyKey: string,
+    @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: WithdrawalsPauseDto,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<WithdrawalsPauseResponseDto> {
-    return this._internalOpsService.setPausedWithdrawals(dto);
+    const result = await this._internalOpsService.updateWithdrawalPause({
+      dto,
+      idempotencyKey,
+      requestHash,
+    });
+    res.status(result.statusCode);
+    return result.body;
   }
 
   @Get('metrics')

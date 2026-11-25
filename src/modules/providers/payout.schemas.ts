@@ -7,7 +7,7 @@ export const payoutAcceptedSchema = z.object({
 
 export const payoutErrorSchema = z.object({
   reason: z.string().nullish(),
-  message: z.string().nullish(),
+  error: z.string().nullish(),
 });
 
 export const payoutInquirySchema = z.object({

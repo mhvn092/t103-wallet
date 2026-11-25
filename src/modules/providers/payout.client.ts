@@ -19,6 +19,13 @@ import type {
   PayoutTransferStatusResult,
 } from './provider.types.js';
 
+const DEFINITIVE_VALIDATION_ERRORS = new Set([
+  'INVALID_IBAN',
+  'INVALID_DESTINATION',
+  'INVALID_REQUEST_ID',
+  'BELOW_MINIMUM',
+]);
+
 @Injectable()
 export class PayoutClient {
   constructor(
@@ -65,11 +72,11 @@ export class PayoutClient {
     if (outcome.status === 400 || outcome.status === 422) {
       const parsedErr = payoutErrorSchema.safeParse(outcome.data);
       const reason = parsedErr.success
-        ? (parsedErr.data.reason ??
-          parsedErr.data.message ??
-          `Rejected with HTTP ${outcome.status}`)
-        : `Rejected with HTTP ${outcome.status}`;
-      return { kind: 'PERMANENT_REJECTED', reason };
+        ? (parsedErr.data.reason ?? parsedErr.data.error)
+        : null;
+      if (reason && DEFINITIVE_VALIDATION_ERRORS.has(reason)) {
+        return { kind: 'PERMANENT_REJECTED', reason };
+      }
     }
 
     return {

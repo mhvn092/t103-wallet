@@ -36,14 +36,21 @@ import {
   DepositDetailResponseDto,
 } from './dto/deposit-response.dto.js';
 
+import {
+  WalletAccessGuard,
+  WalletPrincipal,
+} from '../wallet/wallet-access.guard.js';
+
 @Controller()
 @ApiTags('Deposits & PSP Webhooks')
 export class DepositController {
   constructor(private readonly _depositService: DepositService) {}
 
   @Post('deposits')
-  @UseGuards(IdempotencyPreCheckGuard)
-  @IdempotentRoute('POST:/deposits')
+  @UseGuards(WalletAccessGuard, IdempotencyPreCheckGuard)
+  @IdempotentRoute('POST:/deposits', { userField: 'userId' })
+  @ApiHeader({ name: 'X-Wallet-Gateway-Key', required: false })
+  @ApiHeader({ name: 'X-Wallet-User-Id', required: false })
   @ApiOperation({ summary: 'Initiate an IRT PSP deposit' })
   @ApiHeader({ name: 'Idempotency-Key', required: true })
   @ApiCreatedResponse({
@@ -52,6 +59,8 @@ export class DepositController {
   })
   @ApiErrorResponses(
     HttpStatus.BAD_REQUEST,
+    HttpStatus.UNAUTHORIZED,
+    HttpStatus.FORBIDDEN,
     HttpStatus.CONFLICT,
     HttpStatus.UNPROCESSABLE_ENTITY,
     HttpStatus.SERVICE_UNAVAILABLE,
@@ -72,15 +81,26 @@ export class DepositController {
   }
 
   @Get('deposits/:id')
+  @UseGuards(WalletAccessGuard)
+  @ApiHeader({ name: 'X-Wallet-Gateway-Key', required: false })
+  @ApiHeader({ name: 'X-Wallet-User-Id', required: false })
   @ApiOperation({ summary: 'Get deposit details and settlement status' })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({
     description: 'Deposit record',
     type: DepositDetailResponseDto,
   })
-  @ApiErrorResponses(HttpStatus.BAD_REQUEST, HttpStatus.NOT_FOUND)
-  getDeposit(@Param('id') id: string): Promise<DepositDetailResponseDto> {
-    return this._depositService.getDeposit(id);
+  @ApiErrorResponses(
+    HttpStatus.BAD_REQUEST,
+    HttpStatus.UNAUTHORIZED,
+    HttpStatus.FORBIDDEN,
+    HttpStatus.NOT_FOUND,
+  )
+  getDeposit(
+    @Param('id') id: string,
+    @WalletPrincipal() userId?: string,
+  ): Promise<DepositDetailResponseDto> {
+    return this._depositService.getDeposit(id, userId);
   }
 
   @Post('webhooks/psp/callback')

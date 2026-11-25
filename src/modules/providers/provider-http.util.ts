@@ -1,5 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
 import { getCorrelationId } from '../../common/context/request-context.util.js';
+import { MAX_AMOUNT_MINOR } from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 
 type HttpJsonOutcome =
@@ -7,7 +8,8 @@ type HttpJsonOutcome =
   | { kind: 'NETWORK_ERROR'; reason: string };
 
 const SAFE_MAX_IRR = BigInt(Number.MAX_SAFE_INTEGER);
-const UNSIGNED_INT_REGEX = /^\d+$/;
+const WHOLE_IRR_REGEX = /^\d+(?:\.0+)?$/;
+const MAX_IRR_DIGITS = (MAX_AMOUNT_MINOR * 10n).toString().length;
 
 async function fetchJsonWithTimeout(params: {
   url: string;
@@ -84,12 +86,15 @@ export function parseIrrToIrt(
     }
   } else if (typeof rawAmount === 'string') {
     const trimmed = rawAmount.trim();
-    if (UNSIGNED_INT_REGEX.test(trimmed)) {
-      irrMinor = BigInt(trimmed);
+    if (WHOLE_IRR_REGEX.test(trimmed)) {
+      const whole = trimmed.split('.', 1)[0]?.replace(/^0+/, '') ?? '';
+      if (whole.length <= MAX_IRR_DIGITS) {
+        irrMinor = BigInt(whole);
+      }
     }
   }
 
-  if (irrMinor === null) {
+  if (irrMinor === null || irrMinor / 10n > MAX_AMOUNT_MINOR) {
     return null;
   }
 

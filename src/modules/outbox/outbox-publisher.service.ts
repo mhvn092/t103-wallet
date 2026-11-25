@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { and, asc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
+import { and, asc, eq, isNull, lte, or } from 'drizzle-orm';
 import { DatabaseService } from '../../database/database.service.js';
 import { outboxEvents } from '../../database/schema/index.js';
 import { AmqpBrokerClient } from './amqp-broker.client.js';
@@ -20,9 +20,30 @@ export class OutboxPublisherService {
   async publishPendingBatch(
     limit = 25,
   ): Promise<{ published: number; failed: number }> {
+    let published = 0;
+    let failed = 0;
+
+    for (let index = 0; index < limit; index += 1) {
+      const event = await this._claimNextEvent();
+      if (!event) {
+        break;
+      }
+      const outcome = await this._deliverSingleEvent(event);
+      if (outcome === 'PUBLISHED') {
+        published += 1;
+      } else if (outcome === 'DEFERRED') {
+        failed += 1;
+      }
+    }
+
+    return { published, failed };
+  }
+
+  private async _claimNextEvent() {
     const now = new Date();
-    const claimed = await this._databaseService.runInTransaction(async (tx) => {
-      const due = await tx
+    const leaseUntil = new Date(now.getTime() + OUTBOX_CLAIM_LEASE_MS);
+    return this._databaseService.runInTransaction(async (tx) => {
+      const [due] = await tx
         .select()
         .from(outboxEvents)
         .where(
@@ -36,53 +57,34 @@ export class OutboxPublisherService {
           ),
         )
         .orderBy(asc(outboxEvents.createdAt))
-        .limit(limit)
+        .limit(1)
         .for('update', { skipLocked: true });
-
-      if (due.length === 0) {
-        return [];
+      if (!due) {
+        return undefined;
       }
-
       await tx
         .update(outboxEvents)
-        .set({
-          leaseUntil: new Date(now.getTime() + OUTBOX_CLAIM_LEASE_MS),
-        })
-        .where(
-          inArray(
-            outboxEvents.id,
-            due.map((row) => row.id),
-          ),
-        );
-
-      return due;
+        .set({ leaseUntil })
+        .where(eq(outboxEvents.id, due.id));
+      return { ...due, leaseUntil };
     });
-
-    let published = 0;
-    let failed = 0;
-
-    for (const event of claimed) {
-      const ok = await this._deliverSingleEvent(event);
-      if (ok) {
-        published += 1;
-      } else {
-        failed += 1;
-      }
-    }
-
-    return { published, failed };
   }
 
   private async _deliverSingleEvent(
-    event: typeof outboxEvents.$inferSelect,
-  ): Promise<boolean> {
+    event: typeof outboxEvents.$inferSelect & { leaseUntil: Date },
+  ): Promise<'PUBLISHED' | 'DEFERRED' | 'SUPERSEDED'> {
+    const owned = and(
+      eq(outboxEvents.id, event.id),
+      eq(outboxEvents.status, 'PENDING'),
+      eq(outboxEvents.leaseUntil, event.leaseUntil),
+    );
     try {
       await this._amqpBrokerClient.publishEvent(
         event.id,
         BALANCE_CHANGED_ROUTING_KEY,
         event.payload,
       );
-      await this._databaseService.db
+      const [saved] = await this._databaseService.db
         .update(outboxEvents)
         .set({
           status: 'PUBLISHED',
@@ -90,8 +92,9 @@ export class OutboxPublisherService {
           leaseUntil: null,
           lastError: null,
         })
-        .where(eq(outboxEvents.id, event.id));
-      return true;
+        .where(owned)
+        .returning({ id: outboxEvents.id });
+      return saved ? 'PUBLISHED' : 'SUPERSEDED';
     } catch (err) {
       const nextRetryCount = event.retryCount + 1;
       const backoffMs = Math.min(
@@ -104,7 +107,7 @@ export class OutboxPublisherService {
         `Outbox publish deferred for event=${event.id} retry=${nextRetryCount}: ${safeError}`,
       );
 
-      await this._databaseService.db
+      const [saved] = await this._databaseService.db
         .update(outboxEvents)
         .set({
           retryCount: nextRetryCount,
@@ -112,8 +115,9 @@ export class OutboxPublisherService {
           nextRetryAt: new Date(Date.now() + backoffMs),
           leaseUntil: null,
         })
-        .where(eq(outboxEvents.id, event.id));
-      return false;
+        .where(owned)
+        .returning({ id: outboxEvents.id });
+      return saved ? 'DEFERRED' : 'SUPERSEDED';
     }
   }
 

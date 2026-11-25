@@ -46,9 +46,12 @@ function makeConfig(
 }
 
 describe('InternalOpsGuard', () => {
-  it('allows requests in local dev env when INTERNAL_API_KEY and INTERNAL_ALLOWED_IPS are unset', () => {
+  it('allows keyless internal operations only with local opt-in', () => {
     const guard = new InternalOpsGuard(
-      makeConfig({ APP_ENV: 'local', NODE_ENV: 'development' }),
+      makeConfig({
+        APP_ENV: 'local',
+        ALLOW_UNAUTHENTICATED_INTERNAL_OPS: true,
+      }),
     );
     expect(guard.canActivate(createContext({}))).toBe(true);
   });
@@ -91,7 +94,7 @@ describe('InternalOpsGuard', () => {
       makeConfig({ APP_ENV: 'production' }),
     );
     expect(() => guardNoConfig.canActivate(createContext({}))).toThrow(
-      /production/,
+      /INTERNAL_API_KEY/,
     );
 
     const guardIpOnly = new InternalOpsGuard(
@@ -101,6 +104,22 @@ describe('InternalOpsGuard', () => {
       /INTERNAL_API_KEY/,
     );
   });
+
+  it.each(['dev', 'stage'] as const)(
+    'requires an API key in %s even with local opt-in configured',
+    (APP_ENV) => {
+      const guard = new InternalOpsGuard(
+        makeConfig({
+          APP_ENV,
+          NODE_ENV: 'development',
+          ALLOW_UNAUTHENTICATED_INTERNAL_OPS: true,
+        }),
+      );
+      expect(() => guard.canActivate(createContext({}))).toThrow(
+        /INTERNAL_API_KEY/,
+      );
+    },
+  );
 
   it('enforces timing-safe X-Internal-Api-Key when configured', () => {
     const generatedKey = randomBytes(16).toString('hex');
@@ -120,7 +139,10 @@ describe('InternalOpsGuard', () => {
     const allowedIp = faker.internet.ipv4();
     const deniedIp = faker.internet.ipv4();
     const guard = new InternalOpsGuard(
-      makeConfig({ INTERNAL_ALLOWED_IPS: `${allowedIp}, 127.0.0.1` }),
+      makeConfig({
+        ALLOW_UNAUTHENTICATED_INTERNAL_OPS: true,
+        INTERNAL_ALLOWED_IPS: `${allowedIp}, 127.0.0.1`,
+      }),
     );
     expect(
       guard.canActivate(createContext({ ip: `::ffff:${allowedIp}` })),

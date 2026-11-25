@@ -12,14 +12,15 @@ import {
 import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
+import type { DbExecutor } from '../../database/database.types.js';
 import {
   financialDiscrepancies,
   outboxEvents,
   systemControls,
-  userRestrictions,
   withdrawals,
 } from '../../database/schema/index.js';
 import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
+import { userIdempotencyScope } from '../idempotency/idempotency.util.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
@@ -70,7 +71,10 @@ export class InternalOpsService {
 
     return this._idempotencyService.executeInTransaction<ReceivableSettleResponseDto>(
       {
-        scope: 'POST:/internal/receivables/settle',
+        scope: userIdempotencyScope(
+          'POST:/internal/receivables/settle',
+          dto.userId,
+        ),
         key: params.idempotencyKey,
         requestBody: dto,
         requestHashOverride: params.requestHash,
@@ -136,20 +140,14 @@ export class InternalOpsService {
           });
 
           const remainingReceivable = receivable - settleAmount;
-          const allCleared =
-            remainingReceivable === 0n && otherReceivable === 0n;
-          const nextFrozen = allCleared ? false : frozen;
-
-          if (frozen && allCleared) {
-            await tx
-              .update(userRestrictions)
-              .set({
-                outboundFrozen: false,
-                freezeReason: null,
-                updatedAt: new Date(),
-              })
-              .where(eq(userRestrictions.userId, dto.userId));
-          }
+          const restrictionCleared =
+            remainingReceivable === 0n &&
+            (await this._walletService.clearReceivableRestriction(
+              tx,
+              dto.userId,
+              dto.currency,
+              otherReceivable === 0n,
+            ));
 
           return {
             settlementId,
@@ -160,19 +158,36 @@ export class InternalOpsService {
               remainingReceivable,
               dto.currency,
             ),
-            outboundFrozen: nextFrozen,
+            outboundFrozen: frozen && !restrictionCleared,
           };
         },
       },
     );
   }
 
+  async updateWithdrawalPause(params: {
+    dto: WithdrawalsPauseDto;
+    idempotencyKey: string;
+    requestHash?: string;
+  }): Promise<IdempotentExecutionResult<WithdrawalsPauseResponseDto>> {
+    const { dto } = params;
+    return this._idempotencyService.executeInTransaction({
+      scope: 'POST:/internal/controls/withdrawals-pause',
+      key: params.idempotencyKey,
+      requestBody: dto,
+      requestHashOverride: params.requestHash,
+      statusCode: HttpStatus.OK,
+      handler: (tx) => this.setPausedWithdrawals(dto, tx),
+    });
+  }
+
   async setPausedWithdrawals(
     dto: WithdrawalsPauseDto,
+    db: DbExecutor = this._databaseService.db,
   ): Promise<WithdrawalsPauseResponseDto> {
     const currencies = [...new Set(dto.currencies)];
     const now = new Date();
-    const [saved] = await this._databaseService.db
+    const [saved] = await db
       .insert(systemControls)
       .values({
         key: PAUSED_WITHDRAWALS_CONTROL_KEY,

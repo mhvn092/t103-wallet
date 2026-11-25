@@ -17,6 +17,7 @@ export type PspVerifyResult =
       refId: string | null;
       hasIrrRemainder?: boolean;
     }
+  | { kind: 'INVALID_VERIFIED_AMOUNT'; reportedAmount: string | null }
   | { kind: 'FAILED'; reason: string }
   | { kind: 'RETRYABLE_ERROR'; reason: string };
 

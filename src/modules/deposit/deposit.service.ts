@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   and,
@@ -23,10 +23,18 @@ import { assertValidUuid } from '../../common/utils/uuid-validation.util.js';
 import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
+import type {
+  DbExecutor,
+  DbTransaction,
+} from '../../database/database.types.js';
 import {
   deposits,
   financialDiscrepancies,
 } from '../../database/schema/index.js';
+import {
+  isCacheableRequestError,
+  userIdempotencyScope,
+} from '../idempotency/idempotency.util.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { PspClient } from '../providers/psp.client.js';
@@ -70,7 +78,7 @@ export class DepositService {
     statusCode: number;
     body: DepositCreateResponseDto;
   }> {
-    const scope = 'POST:/deposits';
+    const scope = userIdempotencyScope('POST:/deposits', params.dto.userId);
     const claim =
       await this._idempotencyService.claimLeased<DepositCreateResponseDto>({
         scope,
@@ -80,6 +88,9 @@ export class DepositService {
         leaseMs: this._getDepositInitLeaseMs(),
       });
     if (claim.kind === 'REPLAY') {
+      if (claim.statusCode >= HttpStatus.BAD_REQUEST) {
+        throw new HttpException(claim.body, claim.statusCode);
+      }
       return {
         replayed: true,
         statusCode: claim.statusCode,
@@ -137,6 +148,18 @@ export class DepositService {
         statusCode: HttpStatus.CREATED,
         body,
       };
+    } catch (error) {
+      if (!settledIdempotency && isCacheableRequestError(error)) {
+        await this._idempotencyService.completeLeased({
+          scope,
+          key: params.idempotencyKey,
+          leaseVersion: claim.leaseVersion,
+          statusCode: error.getStatus(),
+          body: error.getResponse(),
+        });
+        settledIdempotency = true;
+      }
+      throw error;
     } finally {
       if (!settledIdempotency) {
         await this._idempotencyService
@@ -146,9 +169,19 @@ export class DepositService {
     }
   }
 
-  async getDeposit(depositId: string): Promise<DepositDetailResponseDto> {
+  async getDeposit(
+    depositId: string,
+    userId?: string,
+  ): Promise<DepositDetailResponseDto> {
     const validId = assertValidUuid(depositId, 'depositId');
     const row = await this._requireDeposit(validId);
+    if (userId !== undefined && row.userId !== userId) {
+      throw new DomainException(
+        HttpStatus.NOT_FOUND,
+        ErrorCode.NOT_FOUND,
+        'Deposit not found',
+      );
+    }
     return toDepositDetailResponseDto(row);
   }
 
@@ -216,7 +249,7 @@ export class DepositService {
     }
 
     if (inquiry.orderId && inquiry.orderId !== row.orderId) {
-      return this._recordOrderIdMismatchAndHaltPolling(row, inquiry.orderId);
+      return this._recordOrderIdMismatch(row, inquiry.orderId);
     }
 
     if (inquiry.status === 'INIT') {
@@ -233,6 +266,10 @@ export class DepositService {
       return this._reschedulePoll(row, nextStatus);
     }
 
+    if (verifyResult.kind === 'INVALID_VERIFIED_AMOUNT') {
+      return this._quarantineInvalidAmount(row, verifyResult.reportedAmount);
+    }
+
     if (verifyResult.kind === 'FAILED') {
       return this._markDepositFailedIfUnsettled(row, null);
     }
@@ -241,7 +278,7 @@ export class DepositService {
       depositId: row.id,
       verifiedAmountIrt: verifyResult.amountIrt,
       hasIrrRemainder: Boolean(verifyResult.hasIrrRemainder),
-      pspRefId: verifyResult.refId ?? inquiry.refId,
+      pspRefId: verifyResult.refId?.trim() || inquiry.refId?.trim() || null,
     });
   }
 
@@ -556,50 +593,103 @@ export class DepositService {
     return this._reschedulePoll(row, targetStatus);
   }
 
-  private async _recordOrderIdMismatchAndHaltPolling(
+  private async _recordOrderIdMismatch(
     row: DepositEntity,
     actualOrderId: string,
   ): Promise<DepositDetailResponseDto> {
-    this._logger.error(
-      `PSP orderId mismatch on deposit=${row.id}: expected=${row.orderId} actual=${actualOrderId}`,
+    const expired =
+      row.expiresAt !== null
+        ? row.expiresAt.getTime() <= Date.now()
+        : Date.now() - row.createdAt.getTime() >=
+          this._getOrphanInitiatedAgeMs();
+    return this._recordVerificationIssue(
+      row,
+      {
+        status: expired ? 'FAILED' : row.status,
+        nextPollAt: expired ? null : this._verificationRetryAt(),
+      },
+      'ORDER_ID_MISMATCH',
+      { expectedOrderId: row.orderId, actualOrderId },
     );
-    await this._databaseService.db
+  }
+
+  private async _quarantineInvalidAmount(
+    row: DepositEntity,
+    reportedAmount: string | null,
+  ): Promise<DepositDetailResponseDto> {
+    return this._recordVerificationIssue(
+      row,
+      { status: 'VERIFYING', nextPollAt: null },
+      'VERIFIED_AMOUNT_OUT_OF_RANGE',
+      { reportedAmount },
+    );
+  }
+
+  private async _recordVerificationIssue(
+    row: DepositEntity,
+    patch: { status: string; nextPollAt: Date | null },
+    type: string,
+    details: Record<string, unknown>,
+  ): Promise<DepositDetailResponseDto> {
+    const updated = await this._databaseService.runInTransaction(async (tx) => {
+      const saved = await this._updateUnsettledDeposit(row, patch, tx);
+      if (saved) {
+        await this._recordDepositDiscrepancy(
+          tx,
+          row,
+          type,
+          row.requestedAmount,
+          details,
+        );
+      }
+      return saved;
+    });
+    return toDepositDetailResponseDto(
+      updated ?? (await this._requireDeposit(row.id)),
+    );
+  }
+
+  private async _recordDepositDiscrepancy(
+    tx: DbTransaction,
+    row: DepositEntity,
+    type: string,
+    amount: string,
+    details: Record<string, unknown>,
+  ): Promise<void> {
+    await tx
       .insert(financialDiscrepancies)
       .values({
         id: generateUuidV7(),
         referenceType: 'DEPOSIT',
         referenceId: row.id,
         userId: row.userId,
-        discrepancyType: 'ORDER_ID_MISMATCH',
-        amount: row.requestedAmount,
+        discrepancyType: type,
+        amount,
         currency: 'IRT',
-        providerPayload: {
-          expectedOrderId: row.orderId,
-          actualOrderId,
-          pspToken: row.pspToken,
-        },
+        providerPayload: details,
         status: 'OPEN',
       })
-      .onConflictDoNothing({
+      .onConflictDoUpdate({
         target: [
           financialDiscrepancies.referenceType,
           financialDiscrepancies.referenceId,
           financialDiscrepancies.discrepancyType,
         ],
+        set: { status: 'OPEN', amount, providerPayload: details },
       });
-    return this._updateUnsettledDeposit(row, {
-      status: row.status,
-      nextPollAt: null,
-    });
+  }
+
+  private _verificationRetryAt(): Date {
+    return new Date(Date.now() + addJitterMs(DEPOSIT_POLL_BACKOFF_MS));
   }
 
   private async _reschedulePoll(
     row: DepositEntity,
     targetStatus: string,
   ): Promise<DepositDetailResponseDto> {
-    return this._updateUnsettledDeposit(row, {
+    return this._applyUnsettledPatch(row, {
       status: targetStatus,
-      nextPollAt: new Date(Date.now() + addJitterMs(DEPOSIT_POLL_BACKOFF_MS)),
+      nextPollAt: this._verificationRetryAt(),
     });
   }
 
@@ -607,18 +697,29 @@ export class DepositService {
     row: DepositEntity,
     nextPollAt: Date | null,
   ): Promise<DepositDetailResponseDto> {
-    return this._updateUnsettledDeposit(row, {
+    return this._applyUnsettledPatch(row, {
       status: 'FAILED',
       nextPollAt,
     });
   }
 
-  private async _updateUnsettledDeposit(
+  private async _applyUnsettledPatch(
     row: DepositEntity,
     patch: { status: string; nextPollAt: Date | null },
   ): Promise<DepositDetailResponseDto> {
+    const updated = await this._updateUnsettledDeposit(row, patch);
+    return toDepositDetailResponseDto(
+      updated ?? (await this._requireDeposit(row.id)),
+    );
+  }
+
+  private async _updateUnsettledDeposit(
+    row: DepositEntity,
+    patch: { status: string; nextPollAt: Date | null },
+    db: DbExecutor = this._databaseService.db,
+  ): Promise<DepositEntity | undefined> {
     const now = new Date();
-    const [updated] = await this._databaseService.db
+    const [updated] = await db
       .update(deposits)
       .set({
         status: patch.status,
@@ -636,8 +737,7 @@ export class DepositService {
       )
       .returning();
 
-    const current = updated ?? (await this._requireDeposit(row.id));
-    return toDepositDetailResponseDto(current);
+    return updated;
   }
 
   private async _requireDeposit(depositId: string): Promise<DepositEntity> {
@@ -691,6 +791,31 @@ export class DepositService {
 
       if (locked.status === 'SUCCEEDED') {
         return locked;
+      }
+
+      const issue = await this._findSettlementIssue(tx, locked, params);
+      if (issue) {
+        await this._recordDepositDiscrepancy(
+          tx,
+          locked,
+          issue,
+          params.verifiedAmountIrt.toString(),
+          {
+            requestedAmount: locked.requestedAmount,
+            verifiedAmount: params.verifiedAmountIrt.toString(),
+            pspRefId: params.pspRefId,
+          },
+        );
+        return (
+          (await this._updateUnsettledDeposit(
+            locked,
+            {
+              status: 'VERIFYING',
+              nextPollAt: null,
+            },
+            tx,
+          )) ?? locked
+        );
       }
 
       const lockedAccounts =
@@ -751,39 +876,61 @@ export class DepositService {
         .where(eq(deposits.id, locked.id))
         .returning();
 
+      await tx
+        .update(financialDiscrepancies)
+        .set({ status: 'RESOLVED' })
+        .where(
+          and(
+            eq(financialDiscrepancies.referenceType, 'DEPOSIT'),
+            eq(financialDiscrepancies.referenceId, locked.id),
+            eq(financialDiscrepancies.status, 'OPEN'),
+          ),
+        );
+
       if (amountMismatch) {
-        await tx
-          .insert(financialDiscrepancies)
-          .values({
-            id: generateUuidV7(),
-            referenceType: 'DEPOSIT',
-            referenceId: locked.id,
-            userId: locked.userId,
-            discrepancyType: 'AMOUNT_MISMATCH',
-            amount: params.verifiedAmountIrt.toString(),
-            currency: 'IRT',
-            providerPayload: {
-              requestedAmount: locked.requestedAmount,
-              verifiedAmount: params.verifiedAmountIrt.toString(),
-              hasIrrRemainder: params.hasIrrRemainder,
-              pspToken: locked.pspToken,
-              pspRefId: params.pspRefId,
-            },
-            status: 'OPEN',
-          })
-          .onConflictDoNothing({
-            target: [
-              financialDiscrepancies.referenceType,
-              financialDiscrepancies.referenceId,
-              financialDiscrepancies.discrepancyType,
-            ],
-          });
+        await this._recordDepositDiscrepancy(
+          tx,
+          locked,
+          'AMOUNT_MISMATCH',
+          params.verifiedAmountIrt.toString(),
+          {
+            requestedAmount: locked.requestedAmount,
+            verifiedAmount: params.verifiedAmountIrt.toString(),
+            hasIrrRemainder: params.hasIrrRemainder,
+            pspRefId: params.pspRefId,
+          },
+        );
       }
 
       return updated ?? locked;
     });
 
     return toDepositDetailResponseDto(settled);
+  }
+
+  private async _findSettlementIssue(
+    tx: DbTransaction,
+    row: DepositEntity,
+    verification: { verifiedAmountIrt: bigint; pspRefId: string | null },
+  ): Promise<string | null> {
+    if (verification.verifiedAmountIrt > BigInt(row.requestedAmount)) {
+      return 'DEPOSIT_OVERPAYMENT';
+    }
+    const ref = verification.pspRefId;
+    if (!ref) {
+      return null;
+    }
+
+    // Serialize competing claims to the same reference before posting any ledger items.
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${ref}, 103))`,
+    );
+    const [existing] = await tx
+      .select({ id: deposits.id })
+      .from(deposits)
+      .where(and(eq(deposits.pspRefId, ref), ne(deposits.id, row.id)))
+      .limit(1);
+    return existing ? 'PSP_REFERENCE_REUSED' : null;
   }
 
   private readonly _logger = new Logger(DepositService.name);

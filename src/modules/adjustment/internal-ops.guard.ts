@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import {
   CanActivate,
   ExecutionContext,
@@ -9,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
+import { matchesSecret } from '../../common/utils/secret-comparison.util.js';
 import { normalizeIpAddress } from '../../common/utils/ip-address.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 
@@ -27,21 +27,16 @@ export class InternalOpsGuard implements CanActivate {
       infer: true,
     });
     const appEnv = this._configService.get('APP_ENV', { infer: true });
-    const nodeEnv = this._configService.get('NODE_ENV', { infer: true });
     const allowUnauthInternalOps =
       this._configService.get('ALLOW_UNAUTHENTICATED_INTERNAL_OPS', {
         infer: true,
       }) ?? false;
 
-    if (
-      !expectedKey &&
-      (appEnv === 'production' ||
-        (nodeEnv === 'production' && !allowUnauthInternalOps))
-    ) {
+    if (!expectedKey && (appEnv !== 'local' || !allowUnauthInternalOps)) {
       throw new DomainException(
         HttpStatus.FORBIDDEN,
         ErrorCode.FORBIDDEN,
-        'Internal operations require INTERNAL_API_KEY in production',
+        'Internal operations require INTERNAL_API_KEY',
       );
     }
 
@@ -80,13 +75,7 @@ export class InternalOpsGuard implements CanActivate {
     expectedKey: string,
     providedHeader: string | undefined,
   ): void {
-    const providedKey = providedHeader ?? '';
-    const expectedBuf = Buffer.from(expectedKey, 'utf8');
-    const providedBuf = Buffer.from(providedKey, 'utf8');
-    if (
-      expectedBuf.byteLength !== providedBuf.byteLength ||
-      !timingSafeEqual(expectedBuf, providedBuf)
-    ) {
+    if (!matchesSecret(expectedKey, providedHeader)) {
       throw new DomainException(
         HttpStatus.UNAUTHORIZED,
         ErrorCode.UNAUTHORIZED,

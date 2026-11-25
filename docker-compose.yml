@@ -33,6 +33,8 @@ services:
 
   simulator:
     image: hamtapay/t103-simulator:1.0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     ports:
       - "${SIMULATOR_PORT:-8080}:8080"
@@ -40,7 +42,7 @@ services:
       SIM_CHAOS: ${SIM_CHAOS:-default}
       SIM_TIME_SCALE: ${SIM_TIME_SCALE:-1}
       SIM_PUBLIC_URL: http://simulator:8080
-      PAYOUT_WEBHOOK_URL: http://app:3000/webhooks/payout
+      PAYOUT_WEBHOOK_URL: ${PAYOUT_WEBHOOK_URL:-http://app:3000/webhooks/payout}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-hamtapay-sim-secret}
 
   app:
@@ -60,7 +62,7 @@ services:
     environment:
       NODE_ENV: production
       APP_ENV: ${APP_ENV:-local}
-      # Explicitly opt in only for local Compose Appendix A runs; NEVER set true in deployed production
+      # Enabled for local APP_ENV=local Compose Appendix A runs; ignored when APP_ENV!=local or INTERNAL_API_KEY is set
       ALLOW_UNAUTHENTICATED_INTERNAL_OPS: ${ALLOW_UNAUTHENTICATED_INTERNAL_OPS:-true}
       SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
       PORT: 3000
@@ -73,6 +75,7 @@ services:
       PAYOUT_BASE_URL: http://simulator:8080
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://app:3000}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-hamtapay-sim-secret}
+      WALLET_GATEWAY_KEY: ${WALLET_GATEWAY_KEY:-}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
       INTERNAL_ALLOWED_IPS: ${INTERNAL_ALLOWED_IPS:-}
       TRUST_PROXY: ${TRUST_PROXY:-}

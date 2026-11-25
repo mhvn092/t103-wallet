@@ -70,12 +70,16 @@ export const deposits = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     nextPollAt: timestamp('next_poll_at', { withTimezone: true }),
     verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    reconciledSettlementDate: date('reconciled_settlement_date'),
     version: bigint('version', { mode: 'bigint' })
       .notNull()
       .default(sql`1`),
     ...auditTimestamps(),
   },
   (t) => [
+    uniqueIndex('deposits_psp_ref_uq')
+      .on(t.pspRefId)
+      .where(sql`${t.pspRefId} IS NOT NULL`),
     // Migration 0004 attaches INCLUDE (id) for index-only poll claiming
     index('deposits_poll_idx')
       .on(t.nextPollAt)
@@ -127,7 +131,9 @@ export const withdrawals = pgTable(
       .where(sql`${t.status} IN ('PENDING_DISPATCH', 'DISPATCHING')`),
     index('withdrawals_poll_idx')
       .on(t.nextPollAt)
-      .where(sql`${t.status} IN ('PROCESSING', 'MANUAL_REVIEW')`),
+      .where(
+        sql`${t.status} IN ('PROCESSING', 'MANUAL_REVIEW', 'FAILED') AND ${t.nextPollAt} IS NOT NULL`,
+      ),
     index('withdrawals_manual_review_idx')
       .on(t.id)
       .where(sql`${t.status} = 'MANUAL_REVIEW'`),
@@ -169,6 +175,11 @@ export const financialDiscrepancies = pgTable(
     index('financial_discrepancies_open_idx')
       .on(t.id)
       .where(sql`${t.status} = 'OPEN'`),
+    index('financial_discrepancies_open_receivable_idx')
+      .on(t.userId, t.currency)
+      .where(
+        sql`${t.status} = 'OPEN' AND ${t.discrepancyType} = 'LATE_SUCCESS_CONFLICT'`,
+      ),
     uniqueIndex('financial_discrepancies_ref_type_uq').on(
       t.referenceType,
       t.referenceId,

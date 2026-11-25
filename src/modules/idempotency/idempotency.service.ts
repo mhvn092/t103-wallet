@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { and, eq, gt, lte, or, sql } from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
@@ -14,6 +14,8 @@ import type {
   ExistingRecordOutcome,
   IdempotentExecutionResult,
 } from './idempotency.types.js';
+
+import { isCacheableRequestError } from './idempotency.util.js';
 
 @Injectable()
 export class IdempotencyService {
@@ -36,7 +38,7 @@ export class IdempotencyService {
     const expiresAt = new Date(Date.now() + IDEMPOTENCY_DEFAULT_TTL_MS);
     const targetStatus = params.statusCode ?? HttpStatus.CREATED;
 
-    return this._databaseService.runInTransaction(async (tx) => {
+    const result = await this._databaseService.runInTransaction(async (tx) => {
       const [claimed] = await tx
         .insert(idempotencyKeys)
         .values({
@@ -74,14 +76,23 @@ export class IdempotencyService {
         };
       }
 
-      const body = await params.handler(tx);
+      // Roll back business mutations on rejection while retaining the original key claim.
+      const response = await tx
+        .transaction(params.handler)
+        .then((body) => ({ statusCode: targetStatus, body }))
+        .catch((error: unknown) => {
+          if (!isCacheableRequestError(error)) {
+            throw error;
+          }
+          return { statusCode: error.getStatus(), body: error.getResponse() };
+        });
 
       await tx
         .update(idempotencyKeys)
         .set({
           status: 'COMPLETED',
-          responseStatus: targetStatus,
-          responseBody: body,
+          responseStatus: response.statusCode,
+          responseBody: response.body,
         })
         .where(
           and(
@@ -92,10 +103,15 @@ export class IdempotencyService {
 
       return {
         replayed: false,
-        statusCode: targetStatus,
-        body,
+        statusCode: response.statusCode,
+        body: response.body as T,
       };
     });
+
+    if (result.statusCode >= HttpStatus.BAD_REQUEST) {
+      throw new HttpException(result.body as object, result.statusCode);
+    }
+    return result;
   }
 
   /**

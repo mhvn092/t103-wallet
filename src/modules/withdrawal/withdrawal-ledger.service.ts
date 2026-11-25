@@ -186,20 +186,10 @@ export class WithdrawalLedgerService {
       postings,
     });
 
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
-        status: 'SUCCEEDED',
-        providerRefId: resolvedRef,
-        leaseUntil: null,
-        nextPollAt: null,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
-
-    return updated ?? locked;
+    return this._finishWithdrawal(tx, locked, {
+      status: 'SUCCEEDED',
+      providerRefId: resolvedRef,
+    });
   }
 
   async failAndReleaseLockedWithdrawal(
@@ -268,22 +258,12 @@ export class WithdrawalLedgerService {
       );
     }
 
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
-        status: 'FAILED',
-        failureReason: opts.reason,
-        terminalReturn: locked.terminalReturn || opts.markTerminalReturn,
-        quotaReleased: true,
-        leaseUntil: null,
-        nextPollAt: null,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
-
-    return updated ?? locked;
+    return this._finishWithdrawal(tx, locked, {
+      status: 'FAILED',
+      failureReason: opts.reason,
+      terminalReturn: locked.terminalReturn || opts.markTerminalReturn,
+      quotaReleased: true,
+    });
   }
 
   async reverseSucceededWithdrawal(
@@ -388,19 +368,13 @@ export class WithdrawalLedgerService {
       postings,
     });
 
-    if (
-      receivableCredit > 0n &&
-      currentReceivable - receivableCredit === 0n &&
-      BigInt(otherReceivable.balance ?? '0') === 0n
-    ) {
-      await tx
-        .update(userRestrictions)
-        .set({
-          outboundFrozen: false,
-          freezeReason: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(userRestrictions.userId, locked.userId));
+    if (receivableCredit > 0n && currentReceivable === receivableCredit) {
+      await this._walletService.clearReceivableRestriction(
+        tx,
+        locked.userId,
+        ccy,
+        BigInt(otherReceivable.balance ?? '0') === 0n,
+      );
     }
 
     if (!locked.quotaReleased) {
@@ -412,22 +386,12 @@ export class WithdrawalLedgerService {
       );
     }
 
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
-        status: 'FAILED',
-        failureReason: reason,
-        terminalReturn: true,
-        quotaReleased: true,
-        leaseUntil: null,
-        nextPollAt: null,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
-
-    return updated ?? locked;
+    return this._finishWithdrawal(tx, locked, {
+      status: 'FAILED',
+      failureReason: reason,
+      terminalReturn: true,
+      quotaReleased: true,
+    });
   }
 
   async markTerminalReturnOnly(
@@ -438,17 +402,10 @@ export class WithdrawalLedgerService {
     if (locked.terminalReturn) {
       return locked;
     }
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
-        terminalReturn: true,
-        failureReason: locked.failureReason ?? reason,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
-    return updated ?? locked;
+    return this._finishWithdrawal(tx, locked, {
+      terminalReturn: true,
+      failureReason: locked.failureReason ?? reason,
+    });
   }
 
   async hasPriorSettlementOrReturn(
@@ -500,7 +457,10 @@ export class WithdrawalLedgerService {
       locked.userId,
       locked.limitDate,
     );
-    await this._walletService.lockUserRestriction(tx, locked.userId);
+    const frozen = await this._walletService.lockUserRestriction(
+      tx,
+      locked.userId,
+    );
     const lockedAccounts = await this._walletService.lockUserAccountsCanonical(
       tx,
       [availableSpec, receivableSpec],
@@ -583,27 +543,24 @@ export class WithdrawalLedgerService {
     }
 
     const now = new Date();
-    const [updated] = await tx
-      .update(withdrawals)
-      .set({
+    const updated = await this._finishWithdrawal(
+      tx,
+      locked,
+      {
         status: 'SUCCEEDED',
         lateSuccessConflict: true,
         quotaReleased: false,
         providerRefId: meta.providerRefId ?? locked.providerRefId,
-        leaseUntil: null,
-        nextPollAt: null,
-        version: sql`${withdrawals.version} + 1`,
-        updatedAt: now,
-      })
-      .where(eq(withdrawals.id, locked.id))
-      .returning();
+      },
+      now,
+    );
 
-    if (shortfall > 0n) {
+    if (shortfall > 0n && !frozen) {
       await tx
         .update(userRestrictions)
         .set({
           outboundFrozen: true,
-          freezeReason: `Unrecovered shortfall on late-succeeded withdrawal ${locked.id}`,
+          freezeReason: `AUTO-RECEIVABLE:${locked.id}`,
           updatedAt: now,
         })
         .where(eq(userRestrictions.userId, locked.userId));
@@ -625,7 +582,7 @@ export class WithdrawalLedgerService {
           clawback: clawback.toString(),
           shortfall: shortfall.toString(),
         },
-        status: 'OPEN',
+        status: shortfall > 0n ? 'OPEN' : 'RESOLVED',
       })
       .onConflictDoNothing({
         target: [
@@ -635,6 +592,36 @@ export class WithdrawalLedgerService {
         ],
       });
 
+    return updated;
+  }
+
+  private async _finishWithdrawal(
+    tx: DbTransaction,
+    locked: WithdrawalEntity,
+    changes: Partial<
+      Pick<
+        WithdrawalEntity,
+        | 'status'
+        | 'failureReason'
+        | 'providerRefId'
+        | 'terminalReturn'
+        | 'quotaReleased'
+        | 'lateSuccessConflict'
+      >
+    >,
+    updatedAt = new Date(),
+  ): Promise<WithdrawalEntity> {
+    const [updated] = await tx
+      .update(withdrawals)
+      .set({
+        ...changes,
+        leaseUntil: null,
+        nextPollAt: null,
+        version: sql`${withdrawals.version} + 1`,
+        updatedAt,
+      })
+      .where(eq(withdrawals.id, locked.id))
+      .returning();
     return updated ?? locked;
   }
 }

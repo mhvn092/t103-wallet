@@ -59,6 +59,10 @@ export const envSchema = z.object({
     emptyToUndefined,
     z.string().min(1).optional(),
   ),
+  WALLET_GATEWAY_KEY: z.preprocess(
+    emptyToUndefined,
+    z.string().min(32).optional(),
+  ),
   INTERNAL_ALLOWED_IPS: z.preprocess(
     emptyToUndefined,
     z.string().min(1).optional(),
@@ -158,7 +162,12 @@ export const envSchema = z.object({
 export type EnvConfig = z.infer<typeof envSchema>;
 
 export function validateEnv(config: Record<string, unknown>): EnvConfig {
-  const parsed = envSchema.safeParse(config);
+  const parsed = envSchema.safeParse({
+    ...config,
+    APP_ENV:
+      config.APP_ENV ??
+      (config.NODE_ENV === 'production' ? 'production' : 'local'),
+  });
   if (!parsed.success) {
     const details = parsed.error.issues
       .map((issue) => `${issue.path.join('.') || 'env'}: ${issue.message}`)

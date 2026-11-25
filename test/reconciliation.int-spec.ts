@@ -259,7 +259,7 @@ describe('Daily PSP Settlement Reconciliation (Integration)', () => {
     const sameDayDepB = await seedSucceededDeposit({
       userId,
       amountIrt: 50_000n,
-      refId: '555666777',
+      refId: '555666778',
       token: `tok_sd_b_${faker.string.alphanumeric(6)}`,
     });
 
@@ -277,7 +277,7 @@ describe('Daily PSP Settlement Reconciliation (Integration)', () => {
         'ردیف,تاریخ,شماره پیگیری,نوع تراکنش,مبلغ (ریال),شرح',
         '1,۱۴۰۵/۰۹/۰۳,000123450001,واریز درگاه,"800,000",تسویه نیمه‌شب',
         '2,۱۴۰۵/۰۹/۰۳,555666777,واریز درگاه,"500,000",اولین تراکنش با مرجع مشترک',
-        '3,۱۴۰۵/۰۹/۰۳,555666777,واریز درگاه,"500,000",دومین تراکنش با ردیف متفاوت',
+        '3,۱۴۰۵/۰۹/۰۳,555666778,واریز درگاه,"500,000",دومین تراکنش با ردیف متفاوت',
       ].join('\r\n'),
     );
 
@@ -301,6 +301,28 @@ describe('Daily PSP Settlement Reconciliation (Integration)', () => {
         csvAmount: '80000',
         localAmount: '80000',
         depositId: midnightDepId,
+      }),
+    ]);
+
+    mockPspClient.fetchSettlementCsv.mockResolvedValueOnce(
+      [
+        'ردیف,تاریخ,شماره پیگیری,نوع تراکنش,مبلغ (ریال),شرح',
+        '1,۱۴۰۵/۰۹/۰۲,123450001,واریز درگاه,"800,000",مرجع تکراری',
+        '2,۱۴۰۵/۰۹/۰۲,555666777,واریز درگاه,"500,000",مرجع تکراری',
+      ].join('\r\n'),
+    );
+    const repeated = await request(app.getHttpServer())
+      .post('/reconciliation/run')
+      .send({ date: '2026-11-23' })
+      .expect(200);
+    expect(repeated.body.mismatches).toEqual([
+      expect.objectContaining({
+        type: 'MISSING_IN_LOCAL',
+        reference: '123450001',
+      }),
+      expect.objectContaining({
+        type: 'MISSING_IN_LOCAL',
+        reference: '555666777',
       }),
     ]);
 

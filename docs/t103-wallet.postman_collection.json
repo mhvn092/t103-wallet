@@ -136,6 +136,7 @@
             "method": "POST",
             "header": [
               { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" },
               { "key": "X-Internal-Api-Key", "value": "{{internalApiKey}}" }
             ],
             "body": {
@@ -288,8 +289,13 @@
           "request": {
             "method": "POST",
             "header": [
+              { "key": "Content-Type", "value": "application/json" },
               { "key": "Idempotency-Key", "value": "{{$guid}}" }
             ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\"\n}"
+            },
             "url": "{{baseUrl}}/withdrawals/{{withdrawalId}}/cancel"
           }
         },

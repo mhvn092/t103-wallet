@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import { and, eq } from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
+import { isRecord } from '../../common/filters/exception-response.util.js';
 import { sha256CanonicalJson } from '../../common/utils/canonical-json.util.js';
 import { DatabaseService } from '../../database/database.service.js';
 import { idempotencyKeys } from '../../database/schema/index.js';
@@ -18,6 +19,7 @@ import {
   extractValidatedIdempotencyKey,
 } from './idempotency.decorator.js';
 import type { IdempotencyRouteConfig } from './idempotency.types.js';
+import { userIdempotencyScope } from './idempotency.util.js';
 
 @Injectable()
 export class IdempotencyPreCheckGuard implements CanActivate {
@@ -38,28 +40,46 @@ export class IdempotencyPreCheckGuard implements CanActivate {
     const key = extractValidatedIdempotencyKey(req.header('idempotency-key'));
 
     const rawBody: unknown = req.body ?? {};
+    const userValue =
+      config.userField && isRecord(rawBody)
+        ? rawBody[config.userField]
+        : undefined;
+    const userId = typeof userValue === 'string' ? userValue.trim() : '';
+    const scope =
+      config.userField && userId
+        ? userIdempotencyScope(config.scope, userId)
+        : config.scope;
+    const hashBody =
+      config.excludeUserFromHash && config.userField && isRecord(rawBody)
+        ? Object.fromEntries(
+            Object.entries(rawBody).filter(
+              ([name]) => name !== config.userField,
+            ),
+          )
+        : rawBody;
     const hashPayload = config.includeParam
       ? {
           [config.includeParam]: req.params?.[config.includeParam] ?? null,
-          body: rawBody,
+          body: hashBody,
         }
-      : rawBody;
+      : hashBody;
     const requestHash = sha256CanonicalJson(hashPayload);
 
     req[IDEMPOTENCY_REQUEST_CTX] = {
       key,
-      scope: config.scope,
+      scope,
       requestHash,
     };
+
+    if (config.userField && !userId) {
+      return true;
+    }
 
     const [existing] = await this._databaseService.db
       .select({ requestHash: idempotencyKeys.requestHash })
       .from(idempotencyKeys)
       .where(
-        and(
-          eq(idempotencyKeys.scope, config.scope),
-          eq(idempotencyKeys.key, key),
-        ),
+        and(eq(idempotencyKeys.scope, scope), eq(idempotencyKeys.key, key)),
       )
       .limit(1);
 

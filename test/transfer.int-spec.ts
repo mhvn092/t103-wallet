@@ -136,8 +136,8 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
       .expect(403);
     expect(frozenRes.body.code).toBe('OUTBOUND_FROZEN');
 
-    // F-06: Route-scoped Idempotency-Key rejects different sender, invalid payload, and extra fields with 422 IDEMPOTENCY_KEY_REUSED
-    const diffSenderReuse = await request(app.getHttpServer())
+    // Different users can share a key. The same user cannot reuse it for a changed payload.
+    const bobTransferRes = await request(app.getHttpServer())
       .post('/transfers')
       .set('Idempotency-Key', idemKey)
       .send({
@@ -146,8 +146,8 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
         currency: 'USDT',
         amount: '1',
       })
-      .expect(422);
-    expect(diffSenderReuse.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+      .expect(201);
+    expect(bobTransferRes.body.transferId).not.toBe(xfer1.body.transferId);
 
     const aliceInvalidReuse = await request(app.getHttpServer())
       .post('/transfers')
@@ -161,19 +161,6 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
       })
       .expect(422);
     expect(aliceInvalidReuse.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
-
-    // Bob uses his own Idempotency-Key to transfer 1 USDT back to Alice
-    const bobTransferRes = await request(app.getHttpServer())
-      .post('/transfers')
-      .set('Idempotency-Key', `xfer-bob-${faker.string.uuid()}`)
-      .send({
-        fromUserId: bob,
-        toUserId: alice,
-        currency: 'USDT',
-        amount: '1',
-      })
-      .expect(201);
-    expect(bobTransferRes.body.transferId).not.toBe(xfer1.body.transferId);
 
     // F-09: Overflow transfer amount returns 400 INVALID_REQUEST
     const ovfTransfer = await request(app.getHttpServer())

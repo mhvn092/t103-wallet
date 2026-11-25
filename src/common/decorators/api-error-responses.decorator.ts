@@ -14,6 +14,14 @@ const STATUS_DESCRIPTIONS: Readonly<Record<number, string>> = {
   [HttpStatus.SERVICE_UNAVAILABLE]: 'Service or External Provider Unavailable',
 };
 
+export const AUTHENTICATED_WRITE_ERROR_STATUSES = [
+  HttpStatus.BAD_REQUEST,
+  HttpStatus.UNAUTHORIZED,
+  HttpStatus.FORBIDDEN,
+  HttpStatus.CONFLICT,
+  HttpStatus.UNPROCESSABLE_ENTITY,
+] as const;
+
 export function ApiErrorResponses(...statuses: number[]): MethodDecorator {
   return applyDecorators(
     ...statuses.map((status) =>

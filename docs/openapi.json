@@ -114,6 +114,22 @@
         "operationId": "WalletController_getWallet",
         "parameters": [
           {
+            "name": "X-Wallet-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Wallet-Gateway-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "userId",
             "required": true,
             "in": "path",
@@ -143,6 +159,26 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
           }
         },
         "summary": "Get user IRT & USDT balances (returns 0 balances if unseen)",
@@ -155,6 +191,22 @@
       "get": {
         "operationId": "WalletController_getLedger",
         "parameters": [
+          {
+            "name": "X-Wallet-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Wallet-Gateway-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "userId",
             "required": true,
@@ -191,7 +243,7 @@
             "required": false,
             "in": "query",
             "schema": {
-              "default": "AVAILABLE",
+              "default": "ALL",
               "type": "string",
               "enum": [
                 "AVAILABLE",
@@ -227,6 +279,26 @@
           },
           "400": {
             "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
             "content": {
               "application/json": {
                 "schema": {
@@ -467,6 +539,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -512,6 +592,26 @@
           },
           "403": {
             "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict / Invalid State Transition or In-Progress Idempotency",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business Rule Violation",
             "content": {
               "application/json": {
                 "schema": {
@@ -640,6 +740,22 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "X-Wallet-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Wallet-Gateway-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -665,6 +781,26 @@
           },
           "400": {
             "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
             "content": {
               "application/json": {
                 "schema": {
@@ -722,6 +858,22 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "name": "X-Wallet-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Wallet-Gateway-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -737,6 +889,26 @@
           },
           "400": {
             "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
             "content": {
               "application/json": {
                 "schema": {
@@ -809,6 +981,22 @@
         "operationId": "WithdrawalController_create",
         "parameters": [
           {
+            "name": "X-Wallet-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Wallet-Gateway-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
@@ -840,6 +1028,16 @@
           },
           "400": {
             "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
             "content": {
               "application/json": {
                 "schema": {
@@ -900,6 +1098,22 @@
         "operationId": "WithdrawalController_getWithdrawal",
         "parameters": [
           {
+            "name": "X-Wallet-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Wallet-Gateway-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "id",
             "required": true,
             "in": "path",
@@ -930,6 +1144,26 @@
               }
             }
           },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Resource Not Found",
             "content": {
@@ -952,6 +1186,22 @@
         "operationId": "WithdrawalController_cancelWithdrawal",
         "parameters": [
           {
+            "name": "X-Wallet-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Wallet-Gateway-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "id",
             "required": true,
             "in": "path",
@@ -969,6 +1219,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserScopedDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Withdrawal cancelled and locked funds released",
@@ -982,6 +1242,26 @@
           },
           "400": {
             "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / Outbound Operations Frozen or Restricted",
             "content": {
               "application/json": {
                 "schema": {
@@ -1073,6 +1353,16 @@
           },
           "401": {
             "description": "Unauthorized / Invalid Credentials or Signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service or External Provider Unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1219,6 +1509,22 @@
         "operationId": "TransferController_create",
         "parameters": [
           {
+            "name": "X-Wallet-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Wallet-Gateway-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
@@ -1250,6 +1556,16 @@
           },
           "400": {
             "description": "Bad Request / Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized / Invalid Credentials or Signature",
             "content": {
               "application/json": {
                 "schema": {
@@ -2126,6 +2442,18 @@
           "lateSuccessConflict",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "UserScopedDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "example": "user_1"
+          }
+        },
+        "required": [
+          "userId"
         ]
       },
       "WithdrawalPayoutWebhookDto": {

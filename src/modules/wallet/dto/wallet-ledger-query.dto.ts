@@ -54,13 +54,13 @@ export class WalletLedgerQueryDto {
 
   @ApiPropertyOptional({
     enum: WALLET_ACCOUNT_FILTERS,
-    default: 'AVAILABLE',
+    default: 'ALL',
   })
-  @Transform(({ value }) => emptyToUndefined(value) ?? 'AVAILABLE')
+  @Transform(({ value }) => emptyToUndefined(value) ?? 'ALL')
   @IsIn(WALLET_ACCOUNT_FILTERS, {
     message: 'accountType must be AVAILABLE, LOCKED, RECEIVABLE, or ALL',
   })
-  accountType: UserAccountType | 'ALL' = 'AVAILABLE';
+  accountType: UserAccountType | 'ALL' = 'ALL';
 
   @ApiPropertyOptional({ enum: CURRENCIES })
   @Transform(({ value }) => emptyToUndefined(value))

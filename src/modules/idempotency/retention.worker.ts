@@ -29,28 +29,34 @@ export class RetentionWorker extends IntervalWorkerBase {
       await Promise.all([
         this._deleteBatch(
           `DELETE FROM idempotency_keys
-           WHERE ctid IN (
-             SELECT ctid FROM idempotency_keys
+           WHERE (scope, key) IN (
+             SELECT scope, key FROM idempotency_keys
              WHERE expires_at < NOW()
+             ORDER BY expires_at, scope, key
              LIMIT $1
+             FOR UPDATE SKIP LOCKED
            )`,
           safeLimit,
         ),
         this._deleteBatch(
           `DELETE FROM outbox_events
-           WHERE ctid IN (
-             SELECT ctid FROM outbox_events
+           WHERE id IN (
+             SELECT id FROM outbox_events
              WHERE status = 'PUBLISHED' AND published_at < NOW() - INTERVAL '7 days'
+             ORDER BY published_at, id
              LIMIT $1
+             FOR UPDATE SKIP LOCKED
            )`,
           safeLimit,
         ),
         this._deleteBatch(
           `DELETE FROM processed_events
-           WHERE ctid IN (
-             SELECT ctid FROM processed_events
+           WHERE (event_id, consumer_name) IN (
+             SELECT event_id, consumer_name FROM processed_events
              WHERE processed_at < NOW() - INTERVAL '30 days'
+             ORDER BY processed_at, event_id, consumer_name
              LIMIT $1
+             FOR UPDATE SKIP LOCKED
            )`,
           safeLimit,
         ),

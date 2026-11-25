@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { faker } from '@faker-js/faker';
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -289,10 +290,17 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .expect(400);
     expect(missingCancelKey.body.code).toBe('MISSING_IDEMPOTENCY_KEY');
 
+    await request(app.getHttpServer())
+      .post(`/withdrawals/${cancelWdRes.body.withdrawalId}/cancel`)
+      .set('Idempotency-Key', faker.string.uuid())
+      .send({ userId: faker.string.uuid() })
+      .expect(404);
+
     const cancelKey = `wd-cancel-exec-${faker.string.uuid()}`;
     const cancelled = await request(app.getHttpServer())
       .post(`/withdrawals/${cancelWdRes.body.withdrawalId}/cancel`)
       .set('Idempotency-Key', cancelKey)
+      .send({ userId })
       .expect(200);
     expect(cancelled.body.status).toBe('FAILED');
     expect(cancelled.body.failureReason).toBe('CANCELLED_BY_USER');
@@ -326,6 +334,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     const cancelConflict = await request(app.getHttpServer())
       .post(`/withdrawals/${wdId}/cancel`)
       .set('Idempotency-Key', `wd-cancel-conflict-${faker.string.uuid()}`)
+      .send({ userId })
       .expect(409);
     expect(cancelConflict.body.code).toBe('INVALID_STATE_TRANSITION');
 
@@ -336,8 +345,8 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
 
     mockPayoutClient.getTransfer.mockResolvedValueOnce({ kind: 'NOT_FOUND' });
     mockPayoutClient.createTransfer.mockResolvedValueOnce({
-      kind: 'ACCEPTED',
-      trackingId: 'TRK-REPOST-1',
+      kind: 'PERMANENT_REJECTED',
+      reason: 'DUPLICATE_REQUEST_ID',
     });
     await withdrawalService.dispatchPendingBatch();
 
@@ -347,18 +356,26 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       expect.objectContaining({ requestId: reqId }),
     );
 
-    // 3. Settle, then handle bank RETURNED webhook (WD_RETURN refunds AVAILABLE & daily quota)
-    const rawSuccess = JSON.stringify({
-      requestId: reqId,
-      status: 'SUCCEEDED',
-      refId: 'REF-TO-RETURN',
-    });
-    await request(app.getHttpServer())
-      .post('/webhooks/payout')
-      .set('Content-Type', 'application/json')
-      .set('x-signature', signPayoutPayload(rawSuccess, webhookSecret))
-      .send(rawSuccess)
+    const stillHeld = await request(app.getHttpServer())
+      .get(`/wallets/${userId}`)
       .expect(200);
+    expect(stillHeld.body.balances[0].locked).toBe('300000');
+    await database.pool.query(
+      "UPDATE withdrawals SET lease_until = NOW() - INTERVAL '1 second' WHERE id = $1",
+      [wdId],
+    );
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'SUCCEEDED',
+      providerRefId: 'REF-TO-RETURN',
+      failureReason: null,
+    });
+    await withdrawalService.dispatchPendingBatch();
+    const released = await database.pool.query(
+      "SELECT 1 FROM ledger_transactions WHERE reference_id = $1 AND type = 'WD_RELEASE'",
+      [wdId],
+    );
+    expect(released.rowCount).toBe(0);
 
     const rawReturn = JSON.stringify({
       requestId: reqId,
@@ -443,6 +460,8 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     const rawWd2Ok = JSON.stringify({
       requestId: wd2Res.body.providerRequestId as string,
       status: 'SUCCEEDED',
+      amount: '2500000.00',
+      currency: 'IRR',
       refId: 'REF-SPEND-2',
     });
     await request(app.getHttpServer())
@@ -453,10 +472,15 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .expect(200);
 
     // Late SUCCEEDED arrives for Withdrawal #1 (200,000 total: 50,000 clawback + 150,000 receivable shortfall)
-    // Authoritative getTransfer inquiry confirms SUCCEEDED before clawback (F-01)
+    await database.pool.query(
+      "UPDATE user_restrictions SET outbound_frozen = true, freeze_reason = 'AML_INVESTIGATION' WHERE user_id = $1",
+      [userId],
+    );
+
+    // The provider inquiry is behind the signed success event.
     mockPayoutClient.getTransfer.mockResolvedValueOnce({
       kind: 'FOUND',
-      status: 'SUCCEEDED',
+      status: 'PROCESSING',
       providerRefId: 'REF-LATE-BANK-SETTLED',
       failureReason: null,
     });
@@ -465,13 +489,29 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       status: 'SUCCEEDED',
       refId: 'REF-LATE-BANK-SETTLED',
     });
-    const lateRes = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post('/webhooks/payout')
       .set('Content-Type', 'application/json')
       .set('x-signature', signPayoutPayload(rawLateOk, webhookSecret))
       .send(rawLateOk)
-      .expect(200);
-    expect(lateRes.body.status).toBe('SUCCEEDED');
+      .expect(503);
+
+    const scheduled = await database.pool.query(
+      'SELECT next_poll_at FROM withdrawals WHERE id = $1',
+      [wd1Id],
+    );
+    expect(scheduled.rows[0]?.next_poll_at).toBeInstanceOf(Date);
+    await database.pool.query(
+      "UPDATE withdrawals SET next_poll_at = NOW() - INTERVAL '1 second' WHERE id = $1",
+      [wd1Id],
+    );
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'SUCCEEDED',
+      providerRefId: 'REF-LATE-BANK-SETTLED',
+      failureReason: null,
+    });
+    expect(await withdrawalService.pollProcessingBatch()).toBe(1);
 
     const wd1After = await request(app.getHttpServer())
       .get(`/withdrawals/${wd1Id}`)
@@ -495,8 +535,46 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       `SELECT discrepancy_type, status FROM financial_discrepancies WHERE reference_id = $1`,
       [wd1Id],
     );
-    expect(discRows).toEqual([
-      { discrepancy_type: 'LATE_SUCCESS_CONFLICT', status: 'OPEN' },
+    expect(discRows).toEqual(
+      expect.arrayContaining([
+        { discrepancy_type: 'LATE_SUCCESS_CONFLICT', status: 'OPEN' },
+        { discrepancy_type: 'LATE_SUCCESS_VERIFICATION', status: 'RESOLVED' },
+      ]),
+    );
+
+    const ledger = await request(app.getHttpServer())
+      .get(`/wallets/${userId}/ledger`)
+      .expect(200);
+    expect(ledger.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'WD_SETTLE', accountType: 'LOCKED' }),
+        expect.objectContaining({
+          type: 'WD_LATE_SUCCESS',
+          accountType: 'RECEIVABLE',
+        }),
+      ]),
+    );
+
+    const rawReturned = JSON.stringify({
+      requestId: wd2Res.body.providerRequestId as string,
+      status: 'RETURNED',
+    });
+    await request(app.getHttpServer())
+      .post('/webhooks/payout')
+      .set('Content-Type', 'application/json')
+      .set('x-signature', signPayoutPayload(rawReturned, webhookSecret))
+      .send(rawReturned)
+      .expect(200);
+    const afterReturn = await request(app.getHttpServer())
+      .get(`/wallets/${userId}`)
+      .expect(200);
+    expect(afterReturn.body.balances[0].receivable).toBe('0');
+    const restriction = await database.pool.query(
+      'SELECT outbound_frozen, freeze_reason FROM user_restrictions WHERE user_id = $1',
+      [userId],
+    );
+    expect(restriction.rows).toEqual([
+      { outbound_frozen: true, freeze_reason: 'AML_INVESTIGATION' },
     ]);
 
     // Subsequent withdrawal must fail with 403 OUTBOUND_FROZEN even if user deposits more later
@@ -663,10 +741,12 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     const cancel1 = await request(app.getHttpServer())
       .post(`/withdrawals/${cancelId}/cancel`)
       .set('Idempotency-Key', cancelKey)
+      .send({ userId })
       .expect(200);
     const cancel2 = await request(app.getHttpServer())
       .post(`/withdrawals/${cancelId}/cancel`)
       .set('Idempotency-Key', cancelKey)
+      .send({ userId })
       .expect(200);
     expect(cancel1.body.status).toBe('FAILED');
     expect(cancel2.body.status).toBe('FAILED');
@@ -674,6 +754,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     const cancelKeyDifferentWd = await request(app.getHttpServer())
       .post(`/withdrawals/${faker.string.uuid()}/cancel`)
       .set('Idempotency-Key', cancelKey)
+      .send({ userId })
       .expect(422);
     expect(cancelKeyDifferentWd.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
 
@@ -988,6 +1069,15 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       [wdId],
     );
     expect(discRows).toEqual([{ discrepancy_type: 'PAYOUT_PAYLOAD_MISMATCH' }]);
+    await request(app.getHttpServer())
+      .post(`/internal/withdrawals/${wdId}/resolve`)
+      .set('Idempotency-Key', faker.string.uuid())
+      .send({ outcome: 'FAILED', reason: 'Bank confirmed failure' })
+      .expect(200);
+    const metrics = await request(app.getHttpServer())
+      .get('/internal/metrics')
+      .expect(200);
+    expect(metrics.body.openDiscrepancies).toBe(0);
 
     await assertGlobalFinancialInvariants(database.pool);
   });
@@ -1013,7 +1103,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       idempotencyKey: `fund-usdt-${faker.string.uuid()}`,
     });
 
-    // F-06: Route-scoped Idempotency-Key rejects different userId & DTO-invalid/extra payloads with 422 before ValidationPipe
+    // Separate users can use the same key.
     const sharedKey = `wd-shared-${faker.string.uuid()}`;
     await request(app.getHttpServer())
       .post('/withdrawals')
@@ -1026,7 +1116,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       })
       .expect(201);
 
-    const diffUserReuse = await request(app.getHttpServer())
+    const wdBRes = await request(app.getHttpServer())
       .post('/withdrawals')
       .set('Idempotency-Key', sharedKey)
       .send({
@@ -1035,8 +1125,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
         amount: '150000',
         destination: VALID_IBAN,
       })
-      .expect(422);
-    expect(diffUserReuse.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+      .expect(201);
 
     // Reusing key with invalid DTO / numeric amount / extra field returns 422 IDEMPOTENCY_KEY_REUSED (not 400)
     const reuseInvalid = await request(app.getHttpServer())
@@ -1052,20 +1141,10 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .expect(422);
     expect(reuseInvalid.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
 
-    const wdBRes = await request(app.getHttpServer())
-      .post('/withdrawals')
-      .set('Idempotency-Key', `wd-b-ops-${faker.string.uuid()}`)
-      .send({
-        userId: userB,
-        currency: 'IRT',
-        amount: '150000',
-        destination: VALID_IBAN,
-      })
-      .expect(201);
-
     // F-14: Runtime kill-switch pauses USDT withdrawals while keeping IRT active
     await request(app.getHttpServer())
       .post('/internal/controls/withdrawals-pause')
+      .set('Idempotency-Key', faker.string.uuid())
       .send({ currencies: ['USDT'], reason: 'incident containment drill' })
       .expect(200);
 
@@ -1096,6 +1175,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     // Resume all currencies
     await request(app.getHttpServer())
       .post('/internal/controls/withdrawals-pause')
+      .set('Idempotency-Key', faker.string.uuid())
       .send({ currencies: [] })
       .expect(200);
 
@@ -1173,6 +1253,10 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       remainingReceivable: '0',
       outboundFrozen: false,
     });
+    const metricsAfterSettlement = await request(app.getHttpServer())
+      .get('/internal/metrics')
+      .expect(200);
+    expect(metricsAfterSettlement.body.openDiscrepancies).toBe(0);
 
     // Subsequent withdrawal on userB succeeds with available 50k + fresh deposit
     await fundUserViaAdjustment({
@@ -1460,6 +1544,193 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await assertGlobalFinancialInvariants(database.pool);
   });
 
+  it('halts polling and resolves LATE_SUCCESS_VERIFICATION when inquiry refutes, returns 404, mismatches, or hits SLA (F-01)', async () => {
+    const userId = `f01_halt_${faker.string.alphanumeric(6)}`;
+    await fundUserViaAdjustment({
+      app,
+      userId,
+      currency: 'IRT',
+      amount: '500000',
+      idempotencyKey: `fund-f01-halt-${faker.string.uuid()}`,
+    });
+
+    const createRejectedWithdrawal = async () => {
+      const created = await request(app.getHttpServer())
+        .post('/withdrawals')
+        .set('Idempotency-Key', `wd-f01-halt-${faker.string.uuid()}`)
+        .send({
+          userId,
+          currency: 'IRT',
+          amount: '100000',
+          destination: VALID_IBAN,
+        })
+        .expect(201);
+      mockPayoutClient.createTransfer.mockResolvedValueOnce({
+        kind: 'PERMANENT_REJECTED',
+        reason: 'REJECTED_BY_RAIL',
+      });
+      await withdrawalService.dispatchPendingBatch();
+      return created.body as {
+        withdrawalId: string;
+        providerRequestId: string;
+      };
+    };
+
+    const sendSignedSucceeded = (providerRequestId: string, status: number) => {
+      const raw = JSON.stringify({
+        requestId: providerRequestId,
+        status: 'SUCCEEDED',
+        refId: `REF-${providerRequestId}`,
+      });
+      return request(app.getHttpServer())
+        .post('/webhooks/payout')
+        .set('Content-Type', 'application/json')
+        .set('x-signature', signPayoutPayload(raw, webhookSecret))
+        .send(raw)
+        .expect(status);
+    };
+
+    // 1. Inline inquiry returns FOUND FAILED -> webhook returns 200, polling halted, discrepancy RESOLVED
+    const wdFailedInline = await createRejectedWithdrawal();
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'FAILED',
+      providerRefId: null,
+      failureReason: 'BANK_REJECTED',
+    });
+    const resFailedInline = await sendSignedSucceeded(
+      wdFailedInline.providerRequestId,
+      200,
+    );
+    expect(resFailedInline.body.status).toBe('FAILED');
+
+    // 2. Inline inquiry returns NOT_FOUND -> webhook returns 200, polling halted, discrepancy RESOLVED
+    const wdNotFound = await createRejectedWithdrawal();
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({ kind: 'NOT_FOUND' });
+    const resNotFound = await sendSignedSucceeded(
+      wdNotFound.providerRequestId,
+      200,
+    );
+    expect(resNotFound.body.status).toBe('FAILED');
+
+    // 3. Inline inquiry returns PAYOUT_PAYLOAD_MISMATCH -> webhook returns 200, next_poll_at cleared, LATE_SUCCESS_VERIFICATION RESOLVED, PAYOUT_PAYLOAD_MISMATCH OPEN
+    const wdMismatch = await createRejectedWithdrawal();
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'SUCCEEDED',
+      providerRefId: 'REF-MISMATCH',
+      failureReason: null,
+      amount: '9999999',
+      currency: 'USDT',
+    });
+    const resMismatch = await sendSignedSucceeded(
+      wdMismatch.providerRequestId,
+      200,
+    );
+    expect(resMismatch.body.status).toBe('FAILED');
+
+    const { rows: mismatchDisc } = await database.pool.query<{
+      discrepancy_type: string;
+      status: string;
+    }>(
+      `SELECT discrepancy_type, status FROM financial_discrepancies WHERE reference_id = $1`,
+      [wdMismatch.withdrawalId],
+    );
+    expect(mismatchDisc).toEqual(
+      expect.arrayContaining([
+        { discrepancy_type: 'LATE_SUCCESS_VERIFICATION', status: 'RESOLVED' },
+        { discrepancy_type: 'PAYOUT_PAYLOAD_MISMATCH', status: 'OPEN' },
+      ]),
+    );
+
+    // 4. Inline inquiry returns AMBIGUOUS (503), then poller observes FOUND FAILED -> clears next_poll_at & resolves discrepancy
+    const wdPolledFailed = await createRejectedWithdrawal();
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'AMBIGUOUS',
+      reason: 'HTTP 503',
+    });
+    await sendSignedSucceeded(wdPolledFailed.providerRequestId, 503);
+
+    await database.pool.query(
+      `UPDATE withdrawals SET next_poll_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
+      [wdPolledFailed.withdrawalId],
+    );
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'FAILED',
+      providerRefId: null,
+      failureReason: 'BANK_REJECTED',
+    });
+    expect(await withdrawalService.pollProcessingBatch()).toBe(1);
+    expect(await withdrawalService.pollProcessingBatch()).toBe(0);
+
+    // 5. Inline inquiry returns AMBIGUOUS past SLA -> poller stops polling while keeping LATE_SUCCESS_VERIFICATION OPEN
+    const wdSla = await createRejectedWithdrawal();
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'AMBIGUOUS',
+      reason: 'HTTP 503',
+    });
+    await sendSignedSucceeded(wdSla.providerRequestId, 503);
+
+    await database.pool.query(
+      `UPDATE withdrawals SET next_poll_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
+      [wdSla.withdrawalId],
+    );
+    await database.pool.query(
+      `UPDATE financial_discrepancies SET created_at = NOW() - INTERVAL '45 minutes' WHERE reference_id = $1 AND discrepancy_type = 'LATE_SUCCESS_VERIFICATION'`,
+      [wdSla.withdrawalId],
+    );
+    mockPayoutClient.getTransfer.mockResolvedValueOnce({
+      kind: 'AMBIGUOUS',
+      reason: 'HTTP 503',
+    });
+    expect(await withdrawalService.pollProcessingBatch()).toBe(1);
+    expect(await withdrawalService.pollProcessingBatch()).toBe(0);
+
+    const { rows: haltedRows } = await database.pool.query<{
+      id: string;
+      next_poll_at: Date | null;
+    }>(`SELECT id, next_poll_at FROM withdrawals WHERE id = ANY($1::uuid[])`, [
+      [
+        wdFailedInline.withdrawalId,
+        wdNotFound.withdrawalId,
+        wdMismatch.withdrawalId,
+        wdPolledFailed.withdrawalId,
+        wdSla.withdrawalId,
+      ],
+    ]);
+    expect(haltedRows).toHaveLength(5);
+    for (const r of haltedRows) {
+      expect(r.next_poll_at).toBeNull();
+    }
+
+    const { rows: resolvedRows } = await database.pool.query<{
+      reference_id: string;
+      status: string;
+    }>(
+      `SELECT reference_id, status FROM financial_discrepancies WHERE reference_id = ANY($1::uuid[]) AND discrepancy_type = 'LATE_SUCCESS_VERIFICATION'`,
+      [
+        [
+          wdFailedInline.withdrawalId,
+          wdNotFound.withdrawalId,
+          wdPolledFailed.withdrawalId,
+          wdSla.withdrawalId,
+        ],
+      ],
+    );
+    expect(resolvedRows).toHaveLength(4);
+    expect(resolvedRows).toEqual(
+      expect.arrayContaining([
+        { reference_id: wdFailedInline.withdrawalId, status: 'RESOLVED' },
+        { reference_id: wdNotFound.withdrawalId, status: 'RESOLVED' },
+        { reference_id: wdPolledFailed.withdrawalId, status: 'RESOLVED' },
+        { reference_id: wdSla.withdrawalId, status: 'OPEN' },
+      ]),
+    );
+
+    await assertGlobalFinancialInvariants(database.pool);
+  });
+
   it('restores daily quota on WD_LATE_SUCCESS so same-day 200M IRT cap cannot be bypassed even when shortfall=0 (F-07)', async () => {
     const userId = `f07_cap_${faker.string.alphanumeric(6)}`;
     await fundUserViaAdjustment({
@@ -1630,5 +1901,87 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     });
 
     await assertGlobalFinancialInvariants(database.pool);
+  });
+  it('replays insufficient funds after top-up and rejects a changed payload for the same key', async () => {
+    const userId = faker.string.uuid();
+    const key = faker.string.uuid();
+    const payload = {
+      userId,
+      currency: 'IRT',
+      amount: '150000',
+      destination: VALID_IBAN,
+    };
+    const original = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', key)
+      .send(payload)
+      .expect(422);
+    expect(original.body.code).toBe('INSUFFICIENT_FUNDS');
+
+    await fundUserViaAdjustment({
+      app,
+      userId,
+      currency: 'IRT',
+      amount: '200000',
+      idempotencyKey: faker.string.uuid(),
+    });
+
+    const replay = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', key)
+      .send(payload)
+      .expect(422);
+    expect(replay.body).toEqual(original.body);
+    const conflict = await request(app.getHttpServer())
+      .post('/withdrawals')
+      .set('Idempotency-Key', key)
+      .send({ ...payload, amount: '100000' })
+      .expect(422);
+    expect(conflict.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+  });
+  it('checks wallet principal identity before a customer can submit or read a withdrawal', async () => {
+    const userId = faker.string.uuid();
+    const otherUser = faker.string.uuid();
+    await fundUserViaAdjustment({
+      app,
+      userId,
+      currency: 'IRT',
+      amount: '200000',
+      idempotencyKey: faker.string.uuid(),
+    });
+    const config = app.get(ConfigService<EnvConfig, true>);
+    const key = randomBytes(32).toString('hex');
+    config.set('WALLET_GATEWAY_KEY', key);
+    try {
+      const payload = {
+        userId,
+        currency: 'IRT',
+        amount: '150000',
+        destination: VALID_IBAN,
+      };
+      const createRequest = () =>
+        request(app.getHttpServer())
+          .post('/withdrawals')
+          .set('Idempotency-Key', faker.string.uuid())
+          .send(payload);
+      await createRequest().set('X-Wallet-User-Id', userId).expect(401);
+      await createRequest()
+        .set('X-Wallet-Gateway-Key', key)
+        .set('X-Wallet-User-Id', otherUser)
+        .expect(403);
+      const created = await createRequest()
+        .set('X-Wallet-Gateway-Key', key)
+        .set('X-Wallet-User-Id', userId)
+        .expect(201);
+      const id = created.body.withdrawalId as string;
+      await request(app.getHttpServer())
+        .get(`/withdrawals/${id}`)
+        .set('X-Wallet-Gateway-Key', key)
+        .set('X-Wallet-User-Id', otherUser)
+        .expect(404);
+    } finally {
+      config.set('WALLET_GATEWAY_KEY', undefined);
+      delete process.env.WALLET_GATEWAY_KEY;
+    }
   });
 });

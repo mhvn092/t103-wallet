@@ -13,7 +13,7 @@ The critical earlier mistake is **inferring `FAILED` from silence, HTTP timeouts
 
 In our design:
 - **Timeouts / `5xx` / Worker Crashes Never Auto-Fail:** Funds stay `LOCKED`, `WithdrawalWorker` continuously queries `GET /payout/transfers/{provider_request_id}` on `next_poll_at` schedules, and prolonged ambiguity past `WD_MANUAL_REVIEW_SLA_MS` escalates to **`MANUAL_REVIEW`** (keeping funds `LOCKED`).
-- **Strict Terminal Transition Rule:** A withdrawal enters `FAILED` (releasing `LOCKED → AVAILABLE`) **only** on an explicit, verified provider rejection (`4xx` business error or signed/polled terminal `FAILED`), cancellation while still `PENDING_DISPATCH`, or an explicit Operations override after offline bank confirmation.
+- **Strict Terminal Transition Rule:** A withdrawal enters `FAILED` (releasing `LOCKED → AVAILABLE`) **only** on an explicit, verified provider rejection (recognized HTTP `400`/`422` validation code on initial submission or signed/polled terminal `FAILED`), cancellation while still `PENDING_DISPATCH`, or an explicit Operations override after offline bank confirmation.
 
 ### 2. Recovery Protocol If It Still Happens (`WD_LATE_SUCCESS`)
 Even with strict rules, an external provider bug or premature Ops override could still produce a late `SUCCEEDED` on a `FAILED` withdrawal. When that arrives:
@@ -63,7 +63,7 @@ Even with strict rules, an external provider bug or premature Ops override could
 > **Prompt:** If a user wants to cancel a submitted withdrawal, at which stages is cancellation allowed?
 
 ### Decision: Strictly **`PENDING_DISPATCH` Only**
-- **Allowed (`PENDING_DISPATCH`):** Before `WithdrawalWorker` claims the row. Locked `FOR UPDATE` in `POST /withdrawals/:id/cancel`; transitions to `FAILED` (`failure_reason = 'CANCELLED_BY_USER'`), posts `WD_RELEASE` (`LOCKED → AVAILABLE`), and refunds `user_daily_limits`.
+- **Allowed (`PENDING_DISPATCH`):** Before `WithdrawalWorker` claims the row. The request supplies the owner ID and locks the matching withdrawal `FOR UPDATE` in `POST /withdrawals/:id/cancel`, then transitions to `FAILED` (`failure_reason = 'CANCELLED_BY_USER'`), posts `WD_RELEASE` (`LOCKED → AVAILABLE`), and refunds `user_daily_limits`.
 - **Forbidden Stages (`409 INVALID_STATE_TRANSITION`) & Rationale:**
   - **`DISPATCHING`:** A worker holds an active lease and may already be transmitting to `POST /payout/transfers`. Cancelling here risks paying out externally *and* unlocking funds (double-spend).
   - **`PROCESSING` / `MANUAL_REVIEW`:** The transfer instruction is already at the bank/blockchain (`IBAN` or irreversible `TRC20`), where unilateral recall is unsafe or impossible.

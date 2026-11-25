@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
@@ -8,6 +8,7 @@ import * as schema from './schema/index.js';
 
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
+  private readonly _logger = new Logger(DatabaseService.name);
   readonly pool: Pool;
   readonly db: AppDatabase;
 
@@ -17,6 +18,13 @@ export class DatabaseService implements OnModuleDestroy {
       max: 25,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
+      options:
+        '-c lock_timeout=3000 -c statement_timeout=10000 -c idle_in_transaction_session_timeout=15000',
+    });
+    this.pool.on('error', () => {
+      this._logger.warn(
+        'PostgreSQL removed an idle pool client after a connection error',
+      );
     });
     this.db = drizzle(this.pool, { schema });
   }

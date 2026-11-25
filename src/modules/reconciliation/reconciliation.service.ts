@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { sql } from 'drizzle-orm';
+import { and, isNull, sql } from 'drizzle-orm';
 import { formatMinorToApi } from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
+import type { DbTransaction } from '../../database/database.types.js';
 import { deposits } from '../../database/schema/index.js';
 import { PspClient } from '../providers/psp.client.js';
 import type {
@@ -35,20 +36,24 @@ export class ReconciliationService {
     const csvText = await this._pspClient.fetchSettlementCsv(validDate);
     const parsedCsv = parseSettlementCsv(csvText);
 
-    const localForDate = await this._findSucceededInDateOffsetRange(
-      validDate,
-      0,
-      1,
-    );
-    const candidatePool = await this._findSucceededInDateOffsetRange(
-      validDate,
-      -1,
-      2,
-    );
+    return this._databaseService.runInTransaction(async (tx) => {
+      // A provider reference must not match two different daily settlement reports.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(840104)`);
+      return this._reconcileSettlements(tx, validDate, parsedCsv);
+    });
+  }
 
+  private async _reconcileSettlements(
+    tx: DbTransaction,
+    validDate: string,
+    parsedCsv: ReturnType<typeof parseSettlementCsv>,
+  ): Promise<ReconciliationResponseDto> {
+    const candidatePool = await this._findSettlementCandidates(tx, validDate);
+    const localForDate = candidatePool.filter((row) => row.onSettlementDate);
     const localForDateIds = new Set(localForDate.map((row) => row.id));
     const localByRef = this._groupDepositsByNormalizedRef(candidatePool);
     const consumedLocalIds = new Set<string>();
+    const matchedDepositIds = [];
     const mismatches: ReconciliationMismatchDto[] = [];
     const adjacentDayMatches: ReconciliationAdjacentDayMatchDto[] = [];
     let matchedCount = 0;
@@ -61,8 +66,9 @@ export class ReconciliationService {
         consumedLocalIds,
         localForDateIds,
       );
-      if (result.matched) {
+      if (result.matchedDepositId) {
         matchedCount += 1;
+        matchedDepositIds.push(result.matchedDepositId);
       }
       if (result.adjacentMatch) {
         adjacentDayMatchedCount += 1;
@@ -80,6 +86,18 @@ export class ReconciliationService {
       }
     }
 
+    if (matchedDepositIds.length > 0) {
+      await tx
+        .update(deposits)
+        .set({ reconciledSettlementDate: validDate })
+        .where(
+          and(
+            isNull(deposits.reconciledSettlementDate),
+            sql`${deposits.id} IN (SELECT value::uuid FROM jsonb_array_elements_text(${JSON.stringify(matchedDepositIds)}::jsonb))`,
+          ),
+        );
+    }
+
     return {
       date: validDate,
       summary: {
@@ -95,25 +113,29 @@ export class ReconciliationService {
     };
   }
 
-  private async _findSucceededInDateOffsetRange(
+  private async _findSettlementCandidates(
+    tx: DbTransaction,
     dateStr: string,
-    startOffsetDays: number,
-    endOffsetDaysExclusive: number,
   ): Promise<ReconciliationLocalDeposit[]> {
     const tz = this._configService.get('RECONCILIATION_TZ', { infer: true });
-    return this._databaseService.db
+    const start = sql`(${dateStr}::date::timestamp AT TIME ZONE ${tz})`;
+    const end = sql`((${dateStr}::date + 1)::timestamp AT TIME ZONE ${tz})`;
+    return tx
       .select({
         id: deposits.id,
         pspRefId: deposits.pspRefId,
         verifiedAmount: deposits.verifiedAmount,
         verifiedAt: deposits.verifiedAt,
+        onSettlementDate: sql<boolean>`${deposits.verifiedAt} >= ${start} AND ${deposits.verifiedAt} < ${end}`,
       })
       .from(deposits)
       .where(
         sql`${deposits.status} = 'SUCCEEDED'
-          AND ${deposits.verifiedAt} >= ((${dateStr}::date + (${startOffsetDays} * INTERVAL '1 day'))::timestamp AT TIME ZONE ${tz})
-          AND ${deposits.verifiedAt} < ((${dateStr}::date + (${endOffsetDaysExclusive} * INTERVAL '1 day'))::timestamp AT TIME ZONE ${tz})`,
-      );
+          AND (${deposits.reconciledSettlementDate} IS NULL OR ${deposits.reconciledSettlementDate} = ${dateStr}::date)
+          AND ${deposits.verifiedAt} >= ${start} - INTERVAL '15 minutes'
+          AND ${deposits.verifiedAt} < ${end} + INTERVAL '15 minutes'`,
+      )
+      .orderBy(deposits.verifiedAt, deposits.id);
   }
 
   private _groupDepositsByNormalizedRef(
@@ -175,7 +197,7 @@ export class ReconciliationService {
     consumedLocalIds: Set<string>,
     localForDateIds: ReadonlySet<string>,
   ): {
-    matched: boolean;
+    matchedDepositId?: string;
     adjacentMatch?: ReconciliationAdjacentDayMatchDto;
     mismatch?: ReconciliationMismatchDto;
   } {
@@ -192,7 +214,6 @@ export class ReconciliationService {
       }
       const localIrt = match ? BigInt(match.verifiedAmount ?? '0') : null;
       return {
-        matched: false,
         mismatch: {
           type: 'AMOUNT_MISMATCH',
           reference: csvRow.normalizedReference,
@@ -207,14 +228,13 @@ export class ReconciliationService {
 
     if (!match) {
       return {
-        matched: false,
         mismatch: {
           type: 'MISSING_IN_LOCAL',
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount: null,
           depositId: null,
-          details: `PSP settlement row present in CSV (${csvRow.description}) but missing in local SUCCEEDED deposits`,
+          details: `PSP settlement row present in CSV (${csvRow.description}) but missing from unmatched local SUCCEEDED deposits for this date`,
         },
       };
     }
@@ -225,7 +245,6 @@ export class ReconciliationService {
 
     if (csvRow.hasIrrRemainder || csvRow.amountIrt !== localIrt) {
       return {
-        matched: false,
         mismatch: {
           type: 'AMOUNT_MISMATCH',
           reference: csvRow.normalizedReference,
@@ -242,7 +261,7 @@ export class ReconciliationService {
     if (!localForDateIds.has(match.id)) {
       const formattedAmount = formatMinorToApi(localIrt, 'IRT');
       return {
-        matched: true,
+        matchedDepositId: match.id,
         adjacentMatch: {
           type: 'MATCHED_ADJACENT_DAY',
           reference: csvRow.normalizedReference,
@@ -251,12 +270,12 @@ export class ReconciliationService {
           depositId: match.id,
           verifiedAt: match.verifiedAt ? match.verifiedAt.toISOString() : null,
           details:
-            'CSV settlement row matched a SUCCEEDED deposit verified on an adjacent day within [-1d, +2d) cutoff window',
+            'CSV settlement row matched a SUCCEEDED deposit verified on an adjacent day within 15 minutes of the settlement cutoff',
         },
       };
     }
 
-    return { matched: true };
+    return { matchedDepositId: match.id };
   }
 
   private _checkMissingInCsv(

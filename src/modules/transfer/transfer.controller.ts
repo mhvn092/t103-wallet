@@ -1,11 +1,4 @@
-import {
-  Body,
-  Controller,
-  HttpStatus,
-  Post,
-  Res,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Post, Res, UseGuards } from '@nestjs/common';
 import {
   ApiCreatedResponse,
   ApiHeader,
@@ -13,7 +6,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
+import {
+  ApiErrorResponses,
+  AUTHENTICATED_WRITE_ERROR_STATUSES,
+} from '../../common/decorators/api-error-responses.decorator.js';
 import {
   IdempotencyRequestHash,
   IdempotentRoute,
@@ -24,14 +20,19 @@ import { TransferCreateDto } from './dto/transfer-create.dto.js';
 import { TransferResponseDto } from './dto/transfer-response.dto.js';
 import { TransferService } from './transfer.service.js';
 
+import { WalletAccessGuard } from '../wallet/wallet-access.guard.js';
+
 @Controller('transfers')
+@UseGuards(WalletAccessGuard)
+@ApiHeader({ name: 'X-Wallet-Gateway-Key', required: false })
+@ApiHeader({ name: 'X-Wallet-User-Id', required: false })
 @ApiTags('Transfers')
 export class TransferController {
   constructor(private readonly _transferService: TransferService) {}
 
   @Post()
   @UseGuards(IdempotencyPreCheckGuard)
-  @IdempotentRoute('POST:/transfers')
+  @IdempotentRoute('POST:/transfers', { userField: 'fromUserId' })
   @ApiOperation({
     summary: 'Atomic P2P internal transfer between two users (IRT or USDT)',
   })
@@ -40,12 +41,7 @@ export class TransferController {
     description: 'Transfer settled atomically in double-entry ledger',
     type: TransferResponseDto,
   })
-  @ApiErrorResponses(
-    HttpStatus.BAD_REQUEST,
-    HttpStatus.FORBIDDEN,
-    HttpStatus.CONFLICT,
-    HttpStatus.UNPROCESSABLE_ENTITY,
-  )
+  @ApiErrorResponses(...AUTHENTICATED_WRITE_ERROR_STATUSES)
   async create(
     @RequireIdempotencyKey() idempotencyKey: string,
     @IdempotencyRequestHash() requestHash: string | undefined,

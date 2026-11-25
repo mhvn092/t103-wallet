@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Headers,
-  HttpStatus,
   Post,
   Res,
   UseGuards,
@@ -14,7 +13,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
+import {
+  ApiErrorResponses,
+  AUTHENTICATED_WRITE_ERROR_STATUSES,
+} from '../../common/decorators/api-error-responses.decorator.js';
 import {
   IdempotencyRequestHash,
   IdempotentRoute,
@@ -34,7 +36,7 @@ export class AdjustmentController {
 
   @Post()
   @UseGuards(IdempotencyPreCheckGuard)
-  @IdempotentRoute('POST:/internal/adjustments')
+  @IdempotentRoute('POST:/internal/adjustments', { userField: 'userId' })
   @ApiOperation({
     summary: 'Manually credit a user wallet with double-entry audit trail',
   })
@@ -45,13 +47,7 @@ export class AdjustmentController {
     description: 'Adjustment posted to ledger',
     type: AdjustmentResponseDto,
   })
-  @ApiErrorResponses(
-    HttpStatus.BAD_REQUEST,
-    HttpStatus.UNAUTHORIZED,
-    HttpStatus.FORBIDDEN,
-    HttpStatus.CONFLICT,
-    HttpStatus.UNPROCESSABLE_ENTITY,
-  )
+  @ApiErrorResponses(...AUTHENTICATED_WRITE_ERROR_STATUSES)
   async create(
     @RequireIdempotencyKey() idempotencyKey: string,
     @IdempotencyRequestHash() requestHash: string | undefined,

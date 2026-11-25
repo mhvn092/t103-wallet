@@ -1,5 +1,13 @@
-import { Controller, Get, HttpStatus, Param, Query } from '@nestjs/common';
 import {
+  Controller,
+  Get,
+  HttpStatus,
+  Param,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiHeader,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
@@ -13,7 +21,12 @@ import { WalletLedgerQueryDto } from './dto/wallet-ledger-query.dto.js';
 import { WalletLedgerResponseDto } from './dto/wallet-ledger-response.dto.js';
 import { WalletService } from './wallet.service.js';
 
+import { WalletAccessGuard } from './wallet-access.guard.js';
+
 @Controller('wallets')
+@UseGuards(WalletAccessGuard)
+@ApiHeader({ name: 'X-Wallet-Gateway-Key', required: false })
+@ApiHeader({ name: 'X-Wallet-User-Id', required: false })
 @ApiTags('Wallets')
 export class WalletController {
   constructor(private readonly _walletService: WalletService) {}
@@ -27,7 +40,11 @@ export class WalletController {
     description: 'User wallet balances',
     type: WalletBalancesResponseDto,
   })
-  @ApiErrorResponses(HttpStatus.BAD_REQUEST)
+  @ApiErrorResponses(
+    HttpStatus.BAD_REQUEST,
+    HttpStatus.UNAUTHORIZED,
+    HttpStatus.FORBIDDEN,
+  )
   getWallet(
     @Param('userId') userId: string,
   ): Promise<WalletBalancesResponseDto> {
@@ -49,7 +66,11 @@ export class WalletController {
     description: 'Paginated ledger items for the requested user',
     type: WalletLedgerResponseDto,
   })
-  @ApiErrorResponses(HttpStatus.BAD_REQUEST)
+  @ApiErrorResponses(
+    HttpStatus.BAD_REQUEST,
+    HttpStatus.UNAUTHORIZED,
+    HttpStatus.FORBIDDEN,
+  )
   getLedger(
     @Param('userId') userId: string,
     @Query() query: WalletLedgerQueryDto,

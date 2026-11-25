@@ -21,11 +21,11 @@ export type RequestWithIdempotency = Request & {
 
 export function IdempotentRoute(
   scope: string,
-  options?: { includeParam?: string },
+  options?: Omit<IdempotencyRouteConfig, 'scope'>,
 ): MethodDecorator {
   const config: IdempotencyRouteConfig = {
     scope,
-    includeParam: options?.includeParam,
+    ...options,
   };
   return SetMetadata(IDEMPOTENCY_ROUTE_META, config);
 }

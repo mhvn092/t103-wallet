@@ -8,6 +8,7 @@ import {
 import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import { adjustments } from '../../database/schema/index.js';
 import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
+import { userIdempotencyScope } from '../idempotency/idempotency.util.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { WalletService } from '../wallet/wallet.service.js';
@@ -42,7 +43,7 @@ export class AdjustmentService {
 
     return this._idempotencyService.executeInTransaction<AdjustmentResponseDto>(
       {
-        scope: 'POST:/internal/adjustments',
+        scope: userIdempotencyScope('POST:/internal/adjustments', dto.userId),
         key: params.idempotencyKey,
         requestBody: dto,
         requestHashOverride: params.requestHash,

@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, lt, or, sql } from 'drizzle-orm';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -16,6 +16,7 @@ import type {
 import {
   type AccountEntity,
   accounts,
+  financialDiscrepancies,
   ledgerItems,
   ledgerTransactions,
   userDailyLimits,
@@ -89,9 +90,9 @@ export class WalletService {
     specs: AccountSpec[],
   ): Promise<Map<string, AccountEntity>> {
     const sortedSpecs = this._sortAccountSpecs(specs);
-    const userIds = [...new Set(sortedSpecs.map((s) => s.userId))];
-    const currencies = [...new Set(sortedSpecs.map((s) => s.currency))];
-    const accountTypes = [...new Set(sortedSpecs.map((s) => s.accountType))];
+    if (!sortedSpecs.length) {
+      return new Map();
+    }
 
     const rows = await tx
       .select()
@@ -99,9 +100,15 @@ export class WalletService {
       .where(
         and(
           eq(accounts.ownerType, 'USER'),
-          inArray(accounts.ownerId, userIds),
-          inArray(accounts.currency, currencies),
-          inArray(accounts.accountType, accountTypes),
+          or(
+            ...sortedSpecs.map((spec) =>
+              and(
+                eq(accounts.ownerId, spec.userId),
+                eq(accounts.currency, spec.currency),
+                eq(accounts.accountType, spec.accountType),
+              ),
+            ),
+          ),
         ),
       )
       .orderBy(asc(accounts.id))
@@ -205,7 +212,7 @@ export class WalletService {
     accountType?: UserAccountType | 'ALL';
     currency?: Currency;
   }): Promise<WalletLedgerResponseDto> {
-    const accountFilter = params.accountType ?? 'AVAILABLE';
+    const accountFilter = params.accountType ?? 'ALL';
     const conditions = [eq(ledgerItems.userId, params.userId)];
 
     if (accountFilter !== 'ALL') {
@@ -283,6 +290,41 @@ export class WalletService {
       .limit(1);
 
     return row?.outboundFrozen ?? false;
+  }
+
+  async clearReceivableRestriction(
+    tx: DbTransaction,
+    userId: string,
+    currency: Currency,
+    allCleared: boolean,
+  ): Promise<boolean> {
+    await tx
+      .update(financialDiscrepancies)
+      .set({ status: 'RESOLVED' })
+      .where(
+        and(
+          eq(financialDiscrepancies.userId, userId),
+          eq(financialDiscrepancies.currency, currency),
+          eq(financialDiscrepancies.discrepancyType, 'LATE_SUCCESS_CONFLICT'),
+          eq(financialDiscrepancies.status, 'OPEN'),
+        ),
+      );
+
+    if (!allCleared) {
+      return false;
+    }
+
+    const [cleared] = await tx
+      .update(userRestrictions)
+      .set({ outboundFrozen: false, freezeReason: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(userRestrictions.userId, userId),
+          like(userRestrictions.freezeReason, 'AUTO-RECEIVABLE:%'),
+        ),
+      )
+      .returning({ userId: userRestrictions.userId });
+    return Boolean(cleared);
   }
 
   async lockDailyLimit(

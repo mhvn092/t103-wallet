@@ -19,5 +19,3 @@ export const payoutWebhookPayloadSchema = z.object({
   amount: z.union([z.string(), z.number()]).nullish(),
   currency: z.string().nullish(),
 });
-
-export type PayoutWebhookPayload = z.infer<typeof payoutWebhookPayloadSchema>;

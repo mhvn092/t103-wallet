@@ -171,8 +171,8 @@ export class PspClient {
         amount !== undefined && amount !== null ? parseIrrToIrt(amount) : null;
       if (!converted || converted.amountIrt <= 0n) {
         return {
-          kind: 'RETRYABLE_ERROR',
-          reason: 'PSP verify succeeded without positive IRR amount',
+          kind: 'INVALID_VERIFIED_AMOUNT',
+          reportedAmount: amount == null ? null : String(amount).slice(0, 80),
         };
       }
       return {

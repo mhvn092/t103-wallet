@@ -27,11 +27,15 @@ import {
   systemControls,
   withdrawals,
 } from '../../database/schema/index.js';
+import { userIdempotencyScope } from '../idempotency/idempotency.util.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
 import { verifyHmacSha256Hex } from '../providers/hmac.util.js';
 import { PayoutClient } from '../providers/payout.client.js';
-import type { PayoutStatusValue } from '../providers/provider.types.js';
+import type {
+  PayoutStatusValue,
+  PayoutTransferStatusResult,
+} from '../providers/provider.types.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import type { WithdrawalCreateDto } from './dto/withdrawal-create.dto.js';
 import type { WithdrawalResolveDto } from './dto/withdrawal-resolve.dto.js';
@@ -102,7 +106,7 @@ export class WithdrawalService {
 
     return this._idempotencyService.executeInTransaction<WithdrawalResponseDto>(
       {
-        scope: 'POST:/withdrawals',
+        scope: userIdempotencyScope('POST:/withdrawals', dto.userId),
         key: params.idempotencyKey,
         requestBody: dto,
         requestHashOverride: params.requestHash,
@@ -187,14 +191,25 @@ export class WithdrawalService {
     );
   }
 
-  async getWithdrawal(withdrawalId: string): Promise<WithdrawalResponseDto> {
+  async getWithdrawal(
+    withdrawalId: string,
+    userId?: string,
+  ): Promise<WithdrawalResponseDto> {
     const validId = assertValidUuid(withdrawalId, 'withdrawalId');
     const row = await this._requireWithdrawal(validId);
+    if (userId !== undefined && row.userId !== userId) {
+      throw new DomainException(
+        HttpStatus.NOT_FOUND,
+        ErrorCode.NOT_FOUND,
+        'Withdrawal not found',
+      );
+    }
     return toWithdrawalResponseDto(row);
   }
 
   async cancelWithdrawal(params: {
     withdrawalId: string;
+    userId: string;
     idempotencyKey: string;
     requestHash?: string;
   }): Promise<IdempotentExecutionResult<WithdrawalResponseDto>> {
@@ -202,16 +217,24 @@ export class WithdrawalService {
 
     return this._idempotencyService.executeInTransaction<WithdrawalResponseDto>(
       {
-        scope: 'POST:/withdrawals/:id/cancel',
+        scope: userIdempotencyScope(
+          'POST:/withdrawals/:id/cancel',
+          params.userId,
+        ),
         key: params.idempotencyKey,
-        requestBody: { id: validId },
+        requestBody: { id: validId, body: {} },
         requestHashOverride: params.requestHash,
         statusCode: HttpStatus.OK,
         handler: async (tx) => {
           const [locked] = await tx
             .select()
             .from(withdrawals)
-            .where(eq(withdrawals.id, validId))
+            .where(
+              and(
+                eq(withdrawals.id, validId),
+                eq(withdrawals.userId, params.userId),
+              ),
+            )
             .for('update')
             .limit(1);
 
@@ -342,6 +365,7 @@ export class WithdrawalService {
                   reason: params.dto.reason,
                 },
               );
+            await this._resolveWithdrawalDiscrepancies(tx, locked.id);
             return toWithdrawalResponseDto(settled);
           }
 
@@ -356,6 +380,7 @@ export class WithdrawalService {
                   operatorId: params.operatorId,
                 },
               );
+            await this._resolveWithdrawalDiscrepancies(tx, locked.id);
             return toWithdrawalResponseDto(failed);
           }
 
@@ -472,7 +497,7 @@ export class WithdrawalService {
           .from(withdrawals)
           .where(
             and(
-              inArray(withdrawals.status, ['PROCESSING', 'MANUAL_REVIEW']),
+              sql`${withdrawals.status} IN ('PROCESSING', 'MANUAL_REVIEW', 'FAILED')`,
               lte(withdrawals.nextPollAt, now),
             ),
           )
@@ -486,17 +511,17 @@ export class WithdrawalService {
 
         const ids = due.map((d) => d.id);
         const pollLeaseMs = this._getProcessingPollLeaseMs();
-        await tx
+        return tx
           .update(withdrawals)
           .set({
             nextPollAt: new Date(
               now.getTime() + addPositiveJitterMs(pollLeaseMs),
             ),
+            version: sql`${withdrawals.version} + 1`,
             updatedAt: now,
           })
-          .where(inArray(withdrawals.id, ids));
-
-        return due;
+          .where(inArray(withdrawals.id, ids))
+          .returning();
       },
     );
 
@@ -640,6 +665,7 @@ export class WithdrawalService {
             providedAmount: recovery.amount ?? null,
             providedCurrency: recovery.currency ?? null,
             status: recovery.status,
+            expectedVersion: row.version,
           });
           return;
         }
@@ -647,6 +673,7 @@ export class WithdrawalService {
           providerRefId: recovery.providerRefId,
           reason: recovery.failureReason,
           source: 'POLLER',
+          expectedVersion: row.version,
         });
         return;
       }
@@ -656,13 +683,14 @@ export class WithdrawalService {
       }
     }
 
-    await this._submitCreateTransfer(row, claimedVersion, slaMs);
+    await this._submitCreateTransfer(row, claimedVersion, slaMs, wasRecovery);
   }
 
   private async _submitCreateTransfer(
     row: WithdrawalEntity,
     claimedVersion: bigint,
     slaMs: number,
+    wasRecovery: boolean,
   ): Promise<void> {
     const ccy: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
     const result = await this._payoutClient.createTransfer({
@@ -696,7 +724,7 @@ export class WithdrawalService {
       return;
     }
 
-    if (result.kind === 'PERMANENT_REJECTED') {
+    if (result.kind === 'PERMANENT_REJECTED' && !wasRecovery) {
       await this._failDispatchingWithdrawal(
         row.id,
         claimedVersion,
@@ -800,6 +828,10 @@ export class WithdrawalService {
       const inquiry = await this._payoutClient.getTransfer(
         row.providerRequestId,
       );
+      if (row.status === 'FAILED') {
+        await this._pollFailedLateVerificationRow(row, inquiry, slaMs);
+        return;
+      }
       if (inquiry.kind === 'FOUND') {
         if (
           detectProviderPayloadMismatch(row, {
@@ -812,6 +844,7 @@ export class WithdrawalService {
             providedAmount: inquiry.amount ?? null,
             providedCurrency: inquiry.currency ?? null,
             status: inquiry.status,
+            expectedVersion: row.version,
           });
           return;
         }
@@ -822,13 +855,14 @@ export class WithdrawalService {
             providerRefId: inquiry.providerRefId,
             reason: inquiry.failureReason,
             source: 'POLLER',
+            expectedVersion: row.version,
           },
         );
         if (
           updated.status === 'PROCESSING' &&
           Date.now() - row.createdAt.getTime() >= slaMs
         ) {
-          await this._escalateToManualReview(row.id);
+          await this._escalateToManualReview(row.id, row.version);
         }
         return;
       }
@@ -848,7 +882,7 @@ export class WithdrawalService {
         row.status === 'PROCESSING' &&
         Date.now() - row.createdAt.getTime() >= slaMs
       ) {
-        await this._escalateToManualReview(row.id);
+        await this._escalateToManualReview(row.id, row.version);
       }
     } catch (err) {
       this._logger.warn(
@@ -857,6 +891,67 @@ export class WithdrawalService {
         }`,
       );
     }
+  }
+
+  private async _pollFailedLateVerificationRow(
+    row: WithdrawalEntity,
+    inquiry: PayoutTransferStatusResult,
+    slaMs: number,
+  ): Promise<void> {
+    if (inquiry.kind === 'FOUND') {
+      await this._handleFoundFailedLateVerification(row, inquiry, slaMs);
+      return;
+    }
+
+    if (inquiry.kind === 'NOT_FOUND') {
+      await this._stopFailedLateVerification(row.id, true);
+      return;
+    }
+
+    if (await this._isLateVerificationExpired(row.id, slaMs)) {
+      await this._stopFailedLateVerification(row.id, false);
+    }
+  }
+
+  private async _handleFoundFailedLateVerification(
+    row: WithdrawalEntity,
+    inquiry: Extract<PayoutTransferStatusResult, { kind: 'FOUND' }>,
+    slaMs: number,
+  ): Promise<void> {
+    if (
+      detectProviderPayloadMismatch(row, {
+        amount: inquiry.amount,
+        currency: inquiry.currency,
+      })
+    ) {
+      await this._recordPayloadMismatchAndEscalate({
+        row,
+        providedAmount: inquiry.amount ?? null,
+        providedCurrency: inquiry.currency ?? null,
+        status: inquiry.status,
+        expectedVersion: row.version,
+      });
+      return;
+    }
+
+    if (inquiry.status === 'FAILED') {
+      await this._stopFailedLateVerification(row.id, true);
+      return;
+    }
+
+    if (inquiry.status === 'PENDING' || inquiry.status === 'PROCESSING') {
+      if (await this._isLateVerificationExpired(row.id, slaMs)) {
+        await this._stopFailedLateVerification(row.id, false);
+      }
+      return;
+    }
+
+    await this._applyProviderStatus(row.id, inquiry.status, {
+      providerRefId: inquiry.providerRefId,
+      reason: inquiry.failureReason,
+      source: 'POLLER',
+      expectedVersion: row.version,
+    });
   }
 
   private async _redispatchUnacceptedManualReview(
@@ -888,10 +983,13 @@ export class WithdrawalService {
       return;
     }
 
-    await this._submitCreateTransfer(claimed, claimed.version, slaMs);
+    await this._submitCreateTransfer(claimed, claimed.version, slaMs, true);
   }
 
-  private async _escalateToManualReview(withdrawalId: string): Promise<void> {
+  private async _escalateToManualReview(
+    withdrawalId: string,
+    expectedVersion: bigint,
+  ): Promise<void> {
     await this._databaseService.db
       .update(withdrawals)
       .set({
@@ -903,6 +1001,7 @@ export class WithdrawalService {
         and(
           eq(withdrawals.id, withdrawalId),
           eq(withdrawals.status, 'PROCESSING'),
+          eq(withdrawals.version, expectedVersion),
         ),
       );
   }
@@ -914,6 +1013,7 @@ export class WithdrawalService {
       providerRefId: string | null;
       reason: string | null;
       source: 'WEBHOOK' | 'POLLER';
+      expectedVersion?: bigint;
     },
   ): Promise<WithdrawalResponseDto> {
     const preRead = await this._requireWithdrawal(withdrawalId);
@@ -962,6 +1062,13 @@ export class WithdrawalService {
           );
         }
 
+        if (
+          meta.expectedVersion !== undefined &&
+          locked.version !== meta.expectedVersion
+        ) {
+          return { kind: 'DONE' as const, row: locked };
+        }
+
         return this._routeLockedStatusTransition(
           tx,
           locked,
@@ -986,49 +1093,161 @@ export class WithdrawalService {
     fallbackRefId: string | null,
   ): Promise<WithdrawalResponseDto> {
     const inquiry = await this._payoutClient.getTransfer(row.providerRequestId);
-    if (inquiry.kind === 'AMBIGUOUS') {
-      throw new DomainException(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        ErrorCode.PROVIDER_UNAVAILABLE,
-        `Payout verification failed for late SUCCEEDED check: ${inquiry.reason}`,
-      );
-    }
-
     if (inquiry.kind === 'FOUND') {
-      if (
-        detectProviderPayloadMismatch(row, {
-          amount: inquiry.amount,
-          currency: inquiry.currency,
-        })
-      ) {
-        const escalated = await this._recordPayloadMismatchAndEscalate({
-          row,
-          providedAmount: inquiry.amount ?? null,
-          providedCurrency: inquiry.currency ?? null,
-          status: inquiry.status,
-        });
-        return toWithdrawalResponseDto(escalated);
-      }
-
-      if (inquiry.status === 'SUCCEEDED') {
-        return this._applyProviderStatus(row.id, 'SUCCEEDED', {
-          providerRefId: inquiry.providerRefId ?? fallbackRefId,
-          reason: inquiry.failureReason,
-          source: 'POLLER',
-        });
-      }
-
-      if (inquiry.status === 'RETURNED' || inquiry.status === 'REVERSED') {
-        return this._applyProviderStatus(row.id, inquiry.status, {
-          providerRefId: inquiry.providerRefId ?? fallbackRefId,
-          reason: inquiry.failureReason,
-          source: 'POLLER',
-        });
-      }
+      await this._applyFoundLateVerification(row, inquiry, fallbackRefId);
+    } else if (inquiry.kind === 'NOT_FOUND') {
+      await this._stopFailedLateVerification(row.id, true);
     }
 
     const latest = await this._requireWithdrawal(row.id);
+    if (latest.status === 'FAILED' && latest.nextPollAt !== null) {
+      throw new DomainException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        ErrorCode.PROVIDER_UNAVAILABLE,
+        'Late payout success is pending provider verification',
+      );
+    }
     return toWithdrawalResponseDto(latest);
+  }
+
+  private async _applyFoundLateVerification(
+    row: WithdrawalEntity,
+    inquiry: Extract<PayoutTransferStatusResult, { kind: 'FOUND' }>,
+    fallbackRefId: string | null,
+  ): Promise<void> {
+    if (detectProviderPayloadMismatch(row, inquiry)) {
+      await this._recordPayloadMismatchAndEscalate({
+        row,
+        providedAmount: inquiry.amount ?? null,
+        providedCurrency: inquiry.currency ?? null,
+        status: inquiry.status,
+      });
+      return;
+    }
+
+    if (inquiry.status === 'FAILED') {
+      await this._stopFailedLateVerification(row.id, true);
+      return;
+    }
+
+    if (inquiry.status === 'PENDING' || inquiry.status === 'PROCESSING') {
+      return;
+    }
+
+    await this._applyProviderStatus(row.id, inquiry.status, {
+      providerRefId: inquiry.providerRefId ?? fallbackRefId,
+      reason: inquiry.failureReason,
+      source: 'POLLER',
+    });
+  }
+
+  private async _scheduleLateSuccessVerification(
+    tx: DbTransaction,
+    locked: WithdrawalEntity,
+  ): Promise<void> {
+    if (locked.nextPollAt !== null) {
+      return;
+    }
+    const now = new Date();
+    await tx
+      .update(withdrawals)
+      .set({
+        nextPollAt: new Date(
+          now.getTime() + WITHDRAWAL_PROCESSING_POLL_DELAY_MS,
+        ),
+      })
+      .where(eq(withdrawals.id, locked.id));
+    await tx
+      .insert(financialDiscrepancies)
+      .values({
+        id: generateUuidV7(),
+        referenceType: 'WITHDRAWAL',
+        referenceId: locked.id,
+        userId: locked.userId,
+        discrepancyType: 'LATE_SUCCESS_VERIFICATION',
+        amount: locked.amount,
+        currency: locked.currency,
+        status: 'OPEN',
+        createdAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          financialDiscrepancies.referenceType,
+          financialDiscrepancies.referenceId,
+          financialDiscrepancies.discrepancyType,
+        ],
+        set: { status: 'OPEN', createdAt: now },
+      });
+  }
+
+  private async _stopFailedLateVerification(
+    withdrawalId: string,
+    resolveDiscrepancy: boolean,
+  ): Promise<void> {
+    await this._databaseService.runInTransaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(withdrawals)
+        .where(eq(withdrawals.id, withdrawalId))
+        .for('update')
+        .limit(1);
+
+      if (!locked || locked.status !== 'FAILED') {
+        return;
+      }
+
+      if (locked.nextPollAt !== null) {
+        await tx
+          .update(withdrawals)
+          .set({
+            nextPollAt: null,
+            leaseUntil: null,
+            version: sql`${withdrawals.version} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(eq(withdrawals.id, locked.id));
+      }
+
+      if (resolveDiscrepancy) {
+        await tx
+          .update(financialDiscrepancies)
+          .set({ status: 'RESOLVED' })
+          .where(
+            and(
+              eq(financialDiscrepancies.referenceType, 'WITHDRAWAL'),
+              eq(financialDiscrepancies.referenceId, locked.id),
+              eq(
+                financialDiscrepancies.discrepancyType,
+                'LATE_SUCCESS_VERIFICATION',
+              ),
+              eq(financialDiscrepancies.status, 'OPEN'),
+            ),
+          );
+      }
+    });
+  }
+
+  private async _isLateVerificationExpired(
+    withdrawalId: string,
+    slaMs: number,
+  ): Promise<boolean> {
+    const [row] = await this._databaseService.db
+      .select({ createdAt: financialDiscrepancies.createdAt })
+      .from(financialDiscrepancies)
+      .where(
+        and(
+          eq(financialDiscrepancies.referenceType, 'WITHDRAWAL'),
+          eq(financialDiscrepancies.referenceId, withdrawalId),
+          eq(
+            financialDiscrepancies.discrepancyType,
+            'LATE_SUCCESS_VERIFICATION',
+          ),
+          eq(financialDiscrepancies.status, 'OPEN'),
+        ),
+      )
+      .limit(1);
+
+    return row ? Date.now() - row.createdAt.getTime() >= slaMs : true;
   }
 
   private async _routeLockedStatusTransition(
@@ -1069,6 +1288,7 @@ export class WithdrawalService {
       case 'INVALID_TRANSITION':
         return { kind: 'DONE', row: locked };
       case 'NEEDS_AUTHORITATIVE_VERIFY':
+        await this._scheduleLateSuccessVerification(tx, locked);
         return { kind: 'NEEDS_AUTHORITATIVE_VERIFY', row: locked };
       case 'ADVANCE_TO_PROCESSING':
         return {
@@ -1117,6 +1337,7 @@ export class WithdrawalService {
           ),
         };
       case 'MARK_TERMINAL_RETURN_ONLY':
+        await this._resolveWithdrawalDiscrepancies(tx, locked.id);
         return {
           kind: 'DONE',
           row: await this._withdrawalLedgerService.markTerminalReturnOnly(
@@ -1126,6 +1347,7 @@ export class WithdrawalService {
           ),
         };
       case 'LATE_SUCCESS_CLAWBACK':
+        await this._resolveWithdrawalDiscrepancies(tx, locked.id);
         return {
           kind: 'DONE',
           row: await this._withdrawalLedgerService.handleLateSuccessConflict(
@@ -1164,6 +1386,26 @@ export class WithdrawalService {
     return updated ?? locked;
   }
 
+  private async _resolveWithdrawalDiscrepancies(
+    tx: DbTransaction,
+    id: string,
+  ): Promise<void> {
+    await tx
+      .update(financialDiscrepancies)
+      .set({ status: 'RESOLVED' })
+      .where(
+        and(
+          eq(financialDiscrepancies.referenceType, 'WITHDRAWAL'),
+          eq(financialDiscrepancies.referenceId, id),
+          inArray(financialDiscrepancies.discrepancyType, [
+            'PAYOUT_PAYLOAD_MISMATCH',
+            'LATE_SUCCESS_VERIFICATION',
+          ]),
+          eq(financialDiscrepancies.status, 'OPEN'),
+        ),
+      );
+  }
+
   private async _assertCurrencyNotPaused(
     tx: DbTransaction,
     currency: Currency,
@@ -1189,6 +1431,7 @@ export class WithdrawalService {
     providedAmount: string | number | null;
     providedCurrency: string | null;
     status: string | null;
+    expectedVersion?: bigint;
   }): Promise<WithdrawalEntity> {
     const { row } = params;
     const expectedCurrency: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
@@ -1206,6 +1449,12 @@ export class WithdrawalService {
         .limit(1);
 
       const target = locked ?? row;
+      if (
+        params.expectedVersion !== undefined &&
+        target.version !== params.expectedVersion
+      ) {
+        return target;
+      }
       await tx
         .insert(financialDiscrepancies)
         .values({
@@ -1251,6 +1500,34 @@ export class WithdrawalService {
           .where(eq(withdrawals.id, target.id))
           .returning();
         return escalated ?? target;
+      }
+
+      if (target.status === 'FAILED') {
+        await tx
+          .update(financialDiscrepancies)
+          .set({ status: 'RESOLVED' })
+          .where(
+            and(
+              eq(financialDiscrepancies.referenceType, 'WITHDRAWAL'),
+              eq(financialDiscrepancies.referenceId, target.id),
+              eq(
+                financialDiscrepancies.discrepancyType,
+                'LATE_SUCCESS_VERIFICATION',
+              ),
+              eq(financialDiscrepancies.status, 'OPEN'),
+            ),
+          );
+        const [halted] = await tx
+          .update(withdrawals)
+          .set({
+            leaseUntil: null,
+            nextPollAt: null,
+            version: sql`${withdrawals.version} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(eq(withdrawals.id, target.id))
+          .returning();
+        return halted ?? target;
       }
 
       return target;

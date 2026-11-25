@@ -540,11 +540,11 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
     await depositService.verifyDeposit(depositId);
     expect(mockPspClient.verifyPayment).not.toHaveBeenCalled();
 
-    // R-02: ORDER_ID_MISMATCH halts polling (next_poll_at = NULL) and deduplicates discrepancy rows
+    // Keep polling until the provider corrects the order ID or the deposit expires.
     const { rows: haltedRows } = await database.pool.query<{
       next_poll_at: Date | null;
     }>(`SELECT next_poll_at FROM deposits WHERE id = $1`, [depositId]);
-    expect(haltedRows[0]?.next_poll_at).toBeNull();
+    expect(haltedRows[0]?.next_poll_at).toBeInstanceOf(Date);
     expect(await depositService.pollPendingDeposits(10)).toBe(0);
 
     mockPspClient.getPaymentStatus.mockResolvedValueOnce({
@@ -602,7 +602,7 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
     const userB = `ub_${faker.string.alphanumeric(6)}`;
     const sharedKey = `dep-shared-${faker.string.uuid()}`;
 
-    // F-06: Route-scoped Idempotency-Key returns 422 IDEMPOTENCY_KEY_REUSED across different users & invalid/extra payloads before ValidationPipe
+    // Users can reuse a key independently.
     mockPspClient.createPayment.mockResolvedValueOnce({
       token: `tok_ua_${faker.string.alphanumeric(6)}`,
       paymentUrl: 'http://psp.local/pay/ua',
@@ -614,12 +614,16 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
       .send({ userId: userA, amount: '50000' })
       .expect(201);
 
-    const diffUserReuse = await request(app.getHttpServer())
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token: faker.string.uuid(),
+      paymentUrl: 'http://psp.local/pay/ub',
+      expiresAt: new Date(Date.now() + 300_000),
+    });
+    await request(app.getHttpServer())
       .post('/deposits')
       .set('Idempotency-Key', sharedKey)
       .send({ userId: userB, amount: '50000' })
-      .expect(422);
-    expect(diffUserReuse.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+      .expect(201);
 
     // Reusing committed key with invalid amount, numeric amount, or extra property returns 422 IDEMPOTENCY_KEY_REUSED (not 400)
     const reuseInvalid = await request(app.getHttpServer())
@@ -820,5 +824,103 @@ describe('Deposit Flow & PSP Recovery (Integration)', () => {
     expect(walletRes.body.balances[0].available).toBe('90000');
 
     await assertGlobalFinancialInvariants(database.pool);
+  });
+  it('quarantines provider overpayments, then credits once when the verified amount is corrected', async () => {
+    const userId = faker.string.uuid();
+    const refId = faker.string.uuid();
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token: faker.string.uuid(),
+      paymentUrl: 'http://psp.local/pay/quarantine',
+      expiresAt: new Date(Date.now() + 300_000),
+    });
+    const created = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', faker.string.uuid())
+      .send({ userId, amount: '100000' })
+      .expect(201);
+    const id = created.body.depositId as string;
+    mockPspClient.getPaymentStatus.mockResolvedValue({
+      kind: 'FOUND',
+      status: 'PAID',
+      refId,
+      orderId: `dep_${id}`,
+    });
+    mockPspClient.verifyPayment.mockResolvedValueOnce({
+      kind: 'VERIFIED',
+      amountIrt: 100_000_000n,
+      refId,
+    });
+    expect((await depositService.verifyDeposit(id)).status).toBe('VERIFYING');
+    const { rows: quarantinedPollRows } = await database.pool.query<{
+      next_poll_at: Date | null;
+    }>(`SELECT next_poll_at FROM deposits WHERE id = $1`, [id]);
+    expect(quarantinedPollRows[0]?.next_poll_at).toBeNull();
+    expect(await depositService.pollPendingDeposits()).toBe(0);
+
+    const quarantined = await request(app.getHttpServer())
+      .get(`/wallets/${userId}`)
+      .expect(200);
+    expect(quarantined.body.balances[0].available).toBe('0');
+
+    mockPspClient.verifyPayment.mockResolvedValueOnce({
+      kind: 'VERIFIED',
+      amountIrt: 100_000n,
+      refId,
+    });
+    expect((await depositService.verifyDeposit(id)).status).toBe('SUCCEEDED');
+    const corrected = await request(app.getHttpServer())
+      .get(`/wallets/${userId}`)
+      .expect(200);
+    expect(corrected.body.balances[0].available).toBe('100000');
+    const issue = await database.pool.query(
+      'SELECT status FROM financial_discrepancies WHERE reference_id = $1 AND discrepancy_type = $2',
+      [id, 'DEPOSIT_OVERPAYMENT'],
+    );
+    expect(issue.rows).toEqual([{ status: 'RESOLVED' }]);
+
+    // Reusing the same pspRefId on a second deposit must quarantine in VERIFYING with next_poll_at IS NULL
+    const user2 = faker.string.uuid();
+    mockPspClient.createPayment.mockResolvedValueOnce({
+      token: faker.string.uuid(),
+      paymentUrl: 'http://psp.local/pay/reused-ref',
+      expiresAt: new Date(Date.now() + 300_000),
+    });
+    const dupRes = await request(app.getHttpServer())
+      .post('/deposits')
+      .set('Idempotency-Key', faker.string.uuid())
+      .send({ userId: user2, amount: '100000' })
+      .expect(201);
+    const dupId = dupRes.body.depositId as string;
+
+    mockPspClient.getPaymentStatus.mockResolvedValueOnce({
+      kind: 'FOUND',
+      status: 'PAID',
+      amountIrt: 100_000n,
+      refId,
+      orderId: `dep_${dupId}`,
+    });
+    mockPspClient.verifyPayment.mockResolvedValueOnce({
+      kind: 'VERIFIED',
+      amountIrt: 100_000n,
+      refId,
+    });
+    expect((await depositService.verifyDeposit(dupId)).status).toBe(
+      'VERIFYING',
+    );
+    const { rows: dupPollRows } = await database.pool.query<{
+      next_poll_at: Date | null;
+    }>(`SELECT next_poll_at FROM deposits WHERE id = $1`, [dupId]);
+    expect(dupPollRows[0]?.next_poll_at).toBeNull();
+    expect(await depositService.pollPendingDeposits()).toBe(0);
+
+    const user2Wallet = await request(app.getHttpServer())
+      .get(`/wallets/${user2}`)
+      .expect(200);
+    expect(user2Wallet.body.balances[0].available).toBe('0');
+    const dupIssue = await database.pool.query(
+      'SELECT status FROM financial_discrepancies WHERE reference_id = $1 AND discrepancy_type = $2',
+      [dupId, 'PSP_REFERENCE_REUSED'],
+    );
+    expect(dupIssue.rows).toEqual([{ status: 'OPEN' }]);
   });
 });

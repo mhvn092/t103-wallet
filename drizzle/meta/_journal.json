@@ -43,6 +43,13 @@
       "when": 1795550000000,
       "tag": "0005_ledger_item_balance_trigger_and_terminal_return",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795560000000,
+      "tag": "0006_audit_recovery_and_scoped_keys",
+      "breakpoints": true
     }
   ]
 }

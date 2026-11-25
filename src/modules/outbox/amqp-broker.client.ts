@@ -16,6 +16,7 @@ import {
 } from './outbox.constants.js';
 
 const UNAVAILABLE_LOG_INTERVAL_MS = 30_000;
+const PUBLISH_TIMEOUT_MS = 5_000;
 
 @Injectable()
 export class AmqpBrokerClient implements OnModuleDestroy {
@@ -28,8 +29,19 @@ export class AmqpBrokerClient implements OnModuleDestroy {
     routingKey: string,
     payload: Record<string, unknown>,
   ): Promise<void> {
-    try {
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        reject(new Error('AMQP publish confirmation timed out'));
+      }, PUBLISH_TIMEOUT_MS);
+    });
+    const publish = async () => {
       const channel = await this._ensurePublishChannel();
+      if (expired) {
+        return;
+      }
       const body = Buffer.from(JSON.stringify(payload), 'utf8');
       channel.publish(OUTBOX_EXCHANGE, routingKey, body, {
         persistent: true,
@@ -38,9 +50,16 @@ export class AmqpBrokerClient implements OnModuleDestroy {
         timestamp: Math.floor(Date.now() / 1000),
       });
       await channel.waitForConfirms();
+    };
+
+    try {
+      await Promise.race([publish(), deadline]);
     } catch (err) {
-      await this._closeQuietly();
+      // The close handshake may also be stalled. Detach immediately for retries.
+      void this._closeQuietly();
       throw new Error(sanitizeBrokerError(err));
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -164,6 +183,10 @@ export class AmqpBrokerClient implements OnModuleDestroy {
       }
     });
     await this._assertTopology(channel);
+    if (this._connection !== conn || this._destroyed) {
+      void channel.close().catch(() => undefined);
+      throw new Error('AMQP publish connection was replaced during setup');
+    }
     this._publishChannel = channel;
     return channel;
   }
@@ -219,9 +242,11 @@ export class AmqpBrokerClient implements OnModuleDestroy {
     this._consumerChannel = null;
     this._connection = null;
 
-    await pub?.close().catch(() => undefined);
-    await sub?.close().catch(() => undefined);
-    await conn?.close().catch(() => undefined);
+    if (conn) {
+      await conn.close().catch(() => undefined);
+    } else {
+      await Promise.allSettled([pub?.close(), sub?.close()]);
+    }
   }
 
   private _destroyed = false;

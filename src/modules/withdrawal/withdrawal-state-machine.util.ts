@@ -8,7 +8,7 @@ export type WithdrawalStatus =
   | 'SUCCEEDED'
   | 'FAILED';
 
-export interface WithdrawalTransitionContext {
+interface WithdrawalTransitionContext {
   status: WithdrawalStatus;
   failureReason: string | null;
   terminalReturn: boolean;
@@ -17,12 +17,12 @@ export interface WithdrawalTransitionContext {
   authoritativeConfirmed: boolean;
 }
 
-export type WithdrawalEvent =
+type WithdrawalEvent =
   | { kind: 'PROVIDER_STATUS'; status: PayoutStatusValue }
   | { kind: 'USER_CANCEL' }
   | { kind: 'OPS_RESOLVE'; outcome: 'SUCCEEDED' | 'FAILED' };
 
-export type WithdrawalAction =
+type WithdrawalAction =
   | { kind: 'NOOP' }
   | { kind: 'ADVANCE_TO_PROCESSING' }
   | { kind: 'SETTLE' }
