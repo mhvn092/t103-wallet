@@ -67,10 +67,10 @@ export class WalletService {
     }
 
     if (params.dailyLimitKeys && params.dailyLimitKeys.length > 0) {
-      const sortedLimits = [...params.dailyLimitKeys].sort((a, b) =>
-        `${a.userId}|${a.limitDate}`.localeCompare(
-          `${b.userId}|${b.limitDate}`,
-        ),
+      const sortedLimits = [...params.dailyLimitKeys].sort(
+        (a, b) =>
+          a.userId.localeCompare(b.userId) ||
+          a.limitDate.localeCompare(b.limitDate),
       );
       await this._databaseService.db
         .insert(userDailyLimits)
@@ -104,10 +104,10 @@ export class WalletService {
   async lockUserAccountsCanonical(
     tx: DbTransaction,
     specs: AccountSpecInterface[],
-  ): Promise<Map<string, AccountEntity>> {
+  ): Promise<AccountEntity[]> {
     const sortedSpecs = this._sortAccountSpecs(specs);
     if (!sortedSpecs.length) {
-      return new Map();
+      return [];
     }
 
     const rows = await tx
@@ -133,28 +133,24 @@ export class WalletService {
       .orderBy(asc(accounts.id))
       .for('update');
 
-    const map = new Map<string, AccountEntity>();
-    for (const row of rows) {
-      map.set(`${row.ownerId}|${row.currency}|${row.accountType}`, row);
-    }
-
     for (const spec of sortedSpecs) {
-      this.getRequiredLockedAccount(map, spec);
+      this.getRequiredLockedAccount(rows, spec);
     }
-    return map;
+    return rows;
   }
 
   getRequiredLockedAccount(
-    map: ReadonlyMap<string, AccountEntity>,
+    lockedAccounts: readonly AccountEntity[],
     spec: AccountSpecInterface,
   ): AccountEntity {
-    const key = `${spec.userId}|${spec.currency}|${spec.accountType}`;
-    const row = map.get(key);
+    const row = lockedAccounts.find((account) =>
+      this._matchesAccountSpec(account, spec),
+    );
     if (!row) {
       throw new DomainException(
         HttpStatus.INTERNAL_SERVER_ERROR,
         ErrorCode.INTERNAL_ERROR,
-        `Missing scaffolded USER account for ${key}`,
+        `Missing scaffolded USER account for ${spec.userId} (${spec.currency} ${spec.accountType})`,
       );
     }
     return row;
@@ -417,11 +413,8 @@ export class WalletService {
         ),
       );
 
-    const existingKeys = new Set(
-      existing.map((r) => `${r.ownerId}|${r.currency}|${r.accountType}`),
-    );
     const missing = dedupedSpecs.filter(
-      (s) => !existingKeys.has(`${s.userId}|${s.currency}|${s.accountType}`),
+      (spec) => !existing.some((row) => this._matchesAccountSpec(row, spec)),
     );
 
     if (missing.length > 0) {
@@ -445,14 +438,35 @@ export class WalletService {
   private _sortAccountSpecs(
     specs: AccountSpecInterface[],
   ): AccountSpecInterface[] {
-    const unique = new Map<string, AccountSpecInterface>();
+    const unique: AccountSpecInterface[] = [];
     for (const spec of specs) {
-      unique.set(`${spec.userId}|${spec.currency}|${spec.accountType}`, spec);
+      if (
+        !unique.some(
+          (item) =>
+            item.userId === spec.userId &&
+            item.currency === spec.currency &&
+            item.accountType === spec.accountType,
+        )
+      ) {
+        unique.push(spec);
+      }
     }
-    return [...unique.values()].sort((a, b) =>
-      `${a.userId}|${a.currency}|${a.accountType}`.localeCompare(
-        `${b.userId}|${b.currency}|${b.accountType}`,
-      ),
+    return unique.sort(
+      (a, b) =>
+        a.userId.localeCompare(b.userId) ||
+        a.currency.localeCompare(b.currency) ||
+        a.accountType.localeCompare(b.accountType),
+    );
+  }
+
+  private _matchesAccountSpec(
+    row: Pick<AccountEntity, 'ownerId' | 'currency' | 'accountType'>,
+    spec: AccountSpecInterface,
+  ): boolean {
+    return (
+      row.ownerId === spec.userId &&
+      row.currency === spec.currency &&
+      row.accountType === USER_TO_ACCOUNT_TYPE[spec.accountType]
     );
   }
 }

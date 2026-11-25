@@ -32,16 +32,15 @@ export class AdjustmentService {
     private readonly _ledgerService: LedgerService,
   ) {}
 
-  async createAdjustment(params: {
-    idempotencyKey: string;
-    requestHash?: string;
-    dto: AdjustmentCreateDto;
-    operatorId: string;
-  }): Promise<IdempotentExecutionResultInterface<AdjustmentResponseDto>> {
-    const { dto } = params;
+  async createAdjustment(
+    idempotencyKey: string,
+    payload: AdjustmentCreateDto,
+    operatorId: string,
+    requestHash?: string,
+  ): Promise<IdempotentExecutionResultInterface<AdjustmentResponseDto>> {
     const availableSpec = {
-      userId: dto.userId,
-      currency: dto.currency,
+      userId: payload.userId,
+      currency: payload.currency,
       accountType: UserAccountTypeEnum.AVAILABLE,
     };
 
@@ -52,12 +51,18 @@ export class AdjustmentService {
 
     return this._idempotencyService.executeInTransaction<AdjustmentResponseDto>(
       {
-        scope: userIdempotencyScope('POST:/internal/adjustments', dto.userId),
-        key: params.idempotencyKey,
-        requestBody: dto,
-        requestHashOverride: params.requestHash,
+        scope: userIdempotencyScope(
+          'POST:/internal/adjustments',
+          payload.userId,
+        ),
+        key: idempotencyKey,
+        requestBody: payload,
+        requestHashOverride: requestHash,
         handler: async (tx) => {
-          const amountMinor = parseAmountToMinor(dto.amount, dto.currency);
+          const amountMinor = parseAmountToMinor(
+            payload.amount,
+            payload.currency,
+          );
           const lockedAccounts =
             await this._walletService.lockUserAccountsCanonical(tx, [
               availableSpec,
@@ -69,7 +74,7 @@ export class AdjustmentService {
           const opsAccount = await this._walletService.getSystemAccount(
             tx,
             SystemOwnerIdEnum.OPS_ADJUSTMENT,
-            dto.currency,
+            payload.currency,
           );
 
           const adjustmentId = generateUuidV7();
@@ -77,11 +82,11 @@ export class AdjustmentService {
             .insert(adjustments)
             .values({
               id: adjustmentId,
-              userId: dto.userId,
-              currency: dto.currency,
+              userId: payload.userId,
+              currency: payload.currency,
               amount: amountMinor.toString(),
-              reason: dto.reason,
-              operatorId: params.operatorId,
+              reason: payload.reason,
+              operatorId: operatorId,
             })
             .returning();
 
@@ -97,10 +102,10 @@ export class AdjustmentService {
             type: LedgerTxTypeEnum.OPS_ADJ,
             referenceType: LedgerRefTypeEnum.ADJUSTMENT,
             referenceId: adjustmentId,
-            description: `Manual ops adjustment: ${dto.reason}`,
+            description: `Manual ops adjustment: ${payload.reason}`,
             metadata: {
-              operatorId: params.operatorId,
-              reason: dto.reason,
+              operatorId: operatorId,
+              reason: payload.reason,
             },
             postings: [
               {
@@ -118,11 +123,11 @@ export class AdjustmentService {
 
           return {
             adjustmentId,
-            userId: dto.userId,
-            currency: dto.currency,
-            amount: formatMinorToApi(amountMinor, dto.currency),
-            reason: dto.reason,
-            operatorId: params.operatorId,
+            userId: payload.userId,
+            currency: payload.currency,
+            amount: formatMinorToApi(amountMinor, payload.currency),
+            reason: payload.reason,
+            operatorId: operatorId,
             createdAt: adj.createdAt.toISOString(),
           };
         },

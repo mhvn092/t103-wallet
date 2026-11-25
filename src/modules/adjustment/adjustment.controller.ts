@@ -43,16 +43,16 @@ export class AdjustmentController {
   async create(
     @RequireIdempotencyKey() idempotencyKey: string,
     @IdempotencyRequestHash() requestHash: string | undefined,
-    @Body() dto: AdjustmentCreateDto,
+    @Body() body: AdjustmentCreateDto,
     @Headers('x-operator-id') rawOperatorId: string | undefined,
   ): Promise<AdjustmentResponseDto> {
     const operatorId = rawOperatorId?.trim() || 'system-ops';
-    const result = await this._adjustmentService.createAdjustment({
+    const result = await this._adjustmentService.createAdjustment(
       idempotencyKey,
-      requestHash,
-      dto,
+      body,
       operatorId,
-    });
+      requestHash,
+    );
     return result.body;
   }
 }
