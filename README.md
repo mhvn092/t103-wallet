@@ -113,6 +113,11 @@ npx prettier --check "src/**/*.ts" "test/**/*.ts"
 
 # Unit & property-based tests (Vitest + fast-check)
 npm test
+npm run test:cov
+
+# Unit coverage is strongest in the core utilities, validation, guards, workers,
+# ledger posting invariants, provider clients, and reconciliation parser.
+# Database-backed application flows are exercised by the integration/E2E suites below.
 
 # PostgreSQL 18 Integration & 100-Concurrency Tests
 # (requires running Postgres matching DATABASE_URI + applied migrations)

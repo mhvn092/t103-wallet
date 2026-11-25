@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>T-103 Wallet &amp; Ledger — Interactive API &amp; Flow Test Console</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #121a2f;
+        --panel-2: #18233f;
+        --border: #263558;
+        --text: #e6edf7;
+        --muted: #93a4c7;
+        --accent: #4f8cff;
+        --green: #22c55e;
+        --amber: #f59e0b;
+        --red: #ef4444;
+        --purple: #a855f7;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.45;
+      }
+      header {
+        padding: 14px 20px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 700;
+      }
+      header .sub {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .config-bar {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+        gap: 10px;
+        padding: 12px 20px;
+        background: var(--panel-2);
+        border-bottom: 1px solid var(--border);
+      }
+      .field label {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      input, textarea, select {
+        width: 100%;
+        background: #0b1224;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 7px 9px;
+        font-size: 12.5px;
+        font-family: var(--mono);
+      }
+      textarea {
+        min-height: 88px;
+        resize: vertical;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 16px;
+        padding: 16px 20px;
+        align-items: start;
+      }
+      @media (max-width: 1100px) {
+        .layout { grid-template-columns: 1fr; }
+      }
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 12px;
+      }
+      .tab {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        padding: 7px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .tab.active {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px;
+        margin-bottom: 12px;
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+      }
+      .title-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .badge {
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 5px;
+        text-transform: uppercase;
+      }
+      .GET { background: #14532d; color: #86efac; }
+      .POST { background: #1e3a8a; color: #93c5fd; }
+      .BONUS { background: #4c1d95; color: #d8b4fe; }
+      .PATH { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+      .desc {
+        color: var(--muted);
+        font-size: 12.5px;
+        margin: 0 0 10px 0;
+      }
+      .btn-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+        align-items: center;
+      }
+      button {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        padding: 7px 12px;
+        font-size: 12.5px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+      }
+      button.green { background: #16a34a; }
+      button.amber { background: #d97706; }
+      button.red { background: #dc2626; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .sticky-right {
+        position: sticky;
+        top: 12px;
+      }
+      pre {
+        margin: 0;
+        background: #070b16;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        font-family: var(--mono);
+        font-size: 12px;
+        overflow-x: auto;
+        max-height: 360px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .log-list {
+        max-height: 290px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .log-item {
+        background: #0b1224;
+        border: 1px solid var(--border);
+        border-left: 4px solid var(--accent);
+        border-radius: 6px;
+        padding: 7px 9px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .log-item.ok { border-left-color: var(--green); }
+      .log-item.err { border-left-color: var(--red); }
+      .pill {
+        display: inline-block;
+        padding: 2px 7px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-family: var(--mono);
+        background: #0b1224;
+        border: 1px solid var(--border);
+      }
+      .pill.ok { color: #86efac; border-color: #166534; }
+      .pill.err { color: #fca5a5; border-color: #991b1b; }
+      .state-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        font-size: 11.5px;
+        font-family: var(--mono);
+      }
+      .state-box {
+        background: #0b1224;
+        border: 1px solid var(--border);
+        padding: 6px 8px;
+        border-radius: 6px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .hidden { display: none; }
+      .flow-step {
+        border-left: 2px solid var(--border);
+        padding-left: 12px;
+        margin: 10px 0;
+      }
+      .flow-step h4 { margin: 0 0 4px 0; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>T-103 Wallet &amp; Ledger — Interactive API &amp; Flow Test Console</h1>
+        <div class="sub">
+          Test every mandatory &amp; bonus endpoint, guided end-to-end flows, idempotency replay/mismatch, concurrency bursts, and signed webhooks.
+        </div>
+      </div>
+      <div class="btn-row" style="margin:0">
+        <a href="/api/docs" target="_blank" style="color:#93c5fd;font-size:12.5px;text-decoration:none;font-weight:600;">Open Swagger (/api/docs) ↗</a>
+      </div>
+    </header>
+
+    <section class="config-bar">
+      <div class="field">
+        <label>API Base URL</label>
+        <input id="cfgApiBase" />
+      </div>
+      <div class="field">
+        <label>Simulator Base URL (Host)</label>
+        <input id="cfgSimBase" value="http://localhost:18080" />
+      </div>
+      <div class="field">
+        <label>Primary User ID</label>
+        <input id="cfgUserId" value="user_demo_1" />
+      </div>
+      <div class="field">
+        <label>Second User ID (Transfer)</label>
+        <input id="cfgUserId2" value="user_demo_2" />
+      </div>
+      <div class="field">
+        <label>X-Wallet-Gateway-Key (opt)</label>
+        <input id="cfgWalletKey" placeholder="empty if local" />
+      </div>
+      <div class="field">
+        <label>X-Internal-Api-Key (opt)</label>
+        <input id="cfgInternalKey" placeholder="empty if local" />
+      </div>
+      <div class="field">
+        <label>X-Operator-Id</label>
+        <input id="cfgOperatorId" value="ops-tester-1" />
+      </div>
+      <div class="field">
+        <label>Webhook Secret (HMAC)</label>
+        <input id="cfgWebhookSecret" value="hamtapay-sim-secret" />
+      </div>
+    </section>
+
+    <div class="layout">
+      <main>
+        <div class="tabs">
+          <button class="tab active" data-tab="flows">Guided Flows (Whole Shebang)</button>
+          <button class="tab" data-tab="wallets">Wallets &amp; Ledger</button>
+          <button class="tab" data-tab="deposits">Deposits &amp; PSP</button>
+          <button class="tab" data-tab="withdrawals">Withdrawals</button>
+          <button class="tab" data-tab="transfers">Transfers (Bonus)</button>
+          <button class="tab" data-tab="ops">Internal Ops &amp; Reconcile</button>
+          <button class="tab" data-tab="health">Health &amp; Metrics</button>
+        </div>
+
+        <!-- TAB: GUIDED FLOWS -->
+        <section id="tab-flows" class="tab-panel">
+          <div class="card">
+            <div class="card-head">
+              <div class="title-row">
+                <span class="badge POST">FLOW 1</span>
+                <strong>IRT Deposit → Simulator PSP Pay → Callback/Verify → Wallet &amp; Ledger</strong>
+              </div>
+              <button class="green" onclick="runFlow1()">Run Full Flow 1</button>
+            </div>
+            <p class="desc">
+              1) Calls <code>POST /deposits</code> with <code>500,000</code> IRT and an <code>Idempotency-Key</code>.
+              2) Rewrites <code>http://simulator:8080</code> to your Simulator Base URL and calls <code>POST /psp/pay/{token}</code> with <code>{"result":"success"}</code> (if simulator CORS blocks browser fetch, it prints the exact <code>curl</code> command and also lets you trigger <code>POST /webhooks/psp/callback</code>).
+              3) Polls <code>GET /deposits/{id}</code> and checks <code>GET /wallets/{userId}</code> + <code>GET /wallets/{userId}/ledger</code>.
+            </p>
+            <div class="btn-row">
+              <button class="secondary" onclick="stepDepositInit()">1. Initiate Deposit</button>
+              <button class="secondary" onclick="stepSimPay('success')">2a. Sim Pay: success</button>
+              <button class="secondary" onclick="stepSimPay('fail')">2b. Sim Pay: fail</button>
+              <button class="secondary" onclick="stepPspCallback('SUCCESS')">3. Send PSP Callback</button>
+              <button class="secondary" onclick="stepCheckDeposit()">4. Check Deposit</button>
+              <button class="secondary" onclick="stepCheckWallet()">5. Check Wallet</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="title-row">
+                <span class="badge POST">FLOW 2</span>
+                <strong>IRT Withdrawal → Hold → Cancel OR HMAC-Signed Payout Webhook</strong>
+              </div>
+              <button class="green" onclick="runFlow2Cancel()">Run Flow 2 (Create + Cancel)</button>
+            </div>
+            <p class="desc">
+              1) Credits user via <code>POST /internal/adjustments</code> (<code>300,000</code> IRT) so balance is funded.
+              2) Calls <code>POST /withdrawals</code> (<code>150,000</code> IRT to IBAN <code>IR820540102680020817909002</code>) — moves funds from <code>available</code> to <code>locked</code> and reserves daily limit.
+              3) Either cancel immediately while in <code>PENDING_DISPATCH</code> (<code>POST /withdrawals/{id}/cancel</code>) OR send an HMAC-SHA256 signed <code>POST /webhooks/payout</code> (<code>SUCCEEDED</code> / <code>FAILED</code>).
+            </p>
+            <div class="btn-row">
+              <button class="secondary" onclick="stepFundUser('IRT', '300000')">1. Credit 300k IRT</button>
+              <button class="secondary" onclick="stepCreateWithdrawal('IRT', '150000')">2. Create Withdrawal</button>
+              <button class="secondary amber" onclick="stepCancelWithdrawal()">3a. Cancel (PENDING_DISPATCH)</button>
+              <button class="secondary green" onclick="stepPayoutWebhook('SUCCEEDED')">3b. Signed Webhook: SUCCEEDED</button>
+              <button class="secondary red" onclick="stepPayoutWebhook('FAILED')">3c. Signed Webhook: FAILED</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="title-row">
+                <span class="badge BONUS">BONUS</span>
+                <strong>FLOW 3: USDT Withdrawal (TRC20 + 1 USDT Fee) &amp; P2P Transfer</strong>
+              </div>
+              <button class="green" onclick="runFlow3Bonus()">Run Bonus Flow 3</button>
+            </div>
+            <p class="desc">
+              1) Credits <code>50.000000</code> USDT to Primary User via <code>POST /internal/adjustments</code>.
+              2) Transfers <code>12.500000</code> USDT atomically to Second User via <code>POST /transfers</code>.
+              3) Withdraws <code>15.000000</code> USDT to TRC20 <code>TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE</code> (locks <code>16.000000</code> USDT = amount + <code>1</code> USDT fee, checks 200M IRT daily limit at <code>60,000</code> IRT/USDT).
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div class="title-row">
+                <span class="badge POST">FLOW 4</span>
+                <strong>Idempotency Replay / Key-Reuse Mismatch &amp; Concurrency Burst</strong>
+              </div>
+            </div>
+            <p class="desc">
+              Tests the two core financial invariants live:
+              <strong>Idempotency:</strong> sends the same <code>Idempotency-Key</code> twice with identical body (must return same ID), then a third time with a different amount (must return <code>422 IDEMPOTENCY_KEY_REUSED</code>).
+              <strong>Concurrency:</strong> credits <code>200,000</code> IRT to a fresh test user and fires <code>10</code> parallel <code>100,000</code> IRT withdrawals — at most <code>2</code> can succeed and balance never goes negative.
+            </p>
+            <div class="btn-row">
+              <button onclick="runIdempotencyTest()">Run Idempotency Test</button>
+              <button class="amber" onclick="runConcurrencyBurst()">Run 10x Parallel Withdrawal Burst</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- TAB: WALLETS -->
+        <section id="tab-wallets" class="tab-panel hidden"></section>
+        <!-- TAB: DEPOSITS -->
+        <section id="tab-deposits" class="tab-panel hidden"></section>
+        <!-- TAB: WITHDRAWALS -->
+        <section id="tab-withdrawals" class="tab-panel hidden"></section>
+        <!-- TAB: TRANSFERS -->
+        <section id="tab-transfers" class="tab-panel hidden"></section>
+        <!-- TAB: OPS -->
+        <section id="tab-ops" class="tab-panel hidden"></section>
+        <!-- TAB: HEALTH -->
+        <section id="tab-health" class="tab-panel hidden"></section>
+      </main>
+
+      <aside class="sticky-right">
+        <div class="card">
+          <div class="card-head">
+            <strong>Captured Session State</strong>
+            <button class="secondary" onclick="refreshStateDisplay()">Sync</button>
+          </div>
+          <div class="state-grid" id="stateGrid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="title-row">
+              <strong>Latest Response</strong>
+              <span id="respStatus" class="pill">—</span>
+              <span id="respTime" class="pill">—</span>
+            </div>
+            <button class="secondary" onclick="copyLastCurl()">Copy cURL</button>
+          </div>
+          <pre id="respMeta" style="margin-bottom:8px;max-height:90px;color:#93a4c7;">Send any request or run a flow to inspect headers &amp; response.</pre>
+          <pre id="respBody">{}</pre>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <strong>Execution Log</strong>
+            <button class="secondary" onclick="clearLogs()">Clear</button>
+          </div>
+          <div class="log-list" id="logList"></div>
+        </div>
+      </aside>
+    </div>
+
+    <script>
+      const state = {
+        depositId: '',
+        pspToken: '',
+        withdrawalId: '',
+        payoutRequestId: '',
+        transferId: '',
+        lastIdempotencyKey: '',
+        lastCurl: '',
+        logs: [],
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      function initDefaults() {
+        const origin = window.location.origin;
+        $('cfgApiBase').value = origin.startsWith('http') ? origin : 'http://localhost:13000';
+        renderState();
+        renderEndpointTabs();
+      }
+
+      function uuid() {
+        if (crypto.randomUUID) return crypto.randomUUID();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+        });
+      }
+
+      function todayUtc() {
+        return new Date().toISOString().slice(0, 10);
+      }
+
+      function getCfg() {
+        return {
+          apiBase: $('cfgApiBase').value.replace(/\/+$/, ''),
+          simBase: $('cfgSimBase').value.replace(/\/+$/, ''),
+          userId: $('cfgUserId').value.trim() || 'user_demo_1',
+          userId2: $('cfgUserId2').value.trim() || 'user_demo_2',
+          walletKey: $('cfgWalletKey').value.trim(),
+          internalKey: $('cfgInternalKey').value.trim(),
+          operatorId: $('cfgOperatorId').value.trim() || 'ops-tester-1',
+          webhookSecret: $('cfgWebhookSecret').value || 'hamtapay-sim-secret',
+        };
+      }
+
+      function renderState() {
+        const entries = [
+          ['depositId', state.depositId || '—'],
+          ['pspToken', state.pspToken || '—'],
+          ['withdrawalId', state.withdrawalId || '—'],
+          ['payoutRequestId', state.payoutRequestId || '—'],
+          ['transferId', state.transferId || '—'],
+          ['lastIdemKey', state.lastIdempotencyKey || '—'],
+        ];
+        $('stateGrid').innerHTML = entries
+          .map(([k, v]) => `<div class="state-box" title="${v}"><strong>${k}:</strong> ${v}</div>`)
+          .join('');
+      }
+      function refreshStateDisplay() { renderState(); }
+
+      async function hmacSha256Hex(secret, message) {
+        const enc = new TextEncoder();
+        const key = await crypto.subtle.importKey(
+          'raw',
+          enc.encode(secret),
+          { name: 'HMAC', hash: 'SHA-256' },
+          false,
+          ['sign'],
+        );
+        const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+        return Array.from(new Uint8Array(sig))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+      }
+
+      function buildCurl(url, method, headers, rawBody) {
+        const h = Object.entries(headers)
+          .map(([k, v]) => `-H '${k}: ${v}'`)
+          .join(' ');
+        const data = rawBody ? ` -d '${rawBody.replace(/'/g, "'\\''")}'` : '';
+        return `curl -i -X ${method} '${url}' ${h}${data}`;
+      }
+
+      async function apiCall({ base, method, path, headers = {}, body = null, signWebhook = false }) {
+        const cfg = getCfg();
+        const url = `${base || cfg.apiBase}${path}`;
+        const reqHeaders = { ...headers };
+        let rawBody = null;
+        if (body !== null && body !== undefined) {
+          rawBody = typeof body === 'string' ? body : JSON.stringify(body);
+          if (!reqHeaders['Content-Type']) reqHeaders['Content-Type'] = 'application/json';
+        }
+        if (signWebhook && rawBody !== null) {
+          reqHeaders['x-signature'] = await hmacSha256Hex(cfg.webhookSecret, rawBody);
+        }
+
+        state.lastCurl = buildCurl(url, method, reqHeaders, rawBody);
+        const t0 = performance.now();
+        let status = 0;
+        let parsed = null;
+        let text = '';
+        let reqId = '';
+        let ok = false;
+
+        try {
+          const res = await fetch(url, { method, headers: reqHeaders, body: rawBody });
+          status = res.status;
+          ok = res.ok;
+          reqId = res.headers.get('x-request-id') || '';
+          text = await res.text();
+          try { parsed = JSON.parse(text); } catch { parsed = text; }
+        } catch (err) {
+          parsed = { networkError: String(err), hint: 'Check server is running or CORS/URL settings.' };
+        }
+        const ms = Math.round(performance.now() - t0);
+
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.depositId) state.depositId = parsed.depositId;
+          if (parsed.paymentUrl) {
+            const m = String(parsed.paymentUrl).match(/\/psp\/pay\/([^/?#]+)/);
+            if (m) state.pspToken = m[1];
+          }
+          if (parsed.withdrawalId) state.withdrawalId = parsed.withdrawalId;
+          if (parsed.providerRequestId) state.payoutRequestId = parsed.providerRequestId;
+          if (parsed.transferId) state.transferId = parsed.transferId;
+        }
+        renderState();
+
+        $('respStatus').textContent = status ? `HTTP ${status}` : 'ERR';
+        $('respStatus').className = `pill ${ok ? 'ok' : 'err'}`;
+        $('respTime').textContent = `${ms} ms`;
+        $('respMeta').textContent = `${method} ${url}${reqId ? `\nx-request-id: ${reqId}` : ''}`;
+        $('respBody').textContent = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
+
+        state.logs.unshift({ method, path, status, ok, ms, parsed, curl: state.lastCurl });
+        renderLogs();
+        return { ok, status, data: parsed };
+      }
+
+      function renderLogs() {
+        $('logList').innerHTML = state.logs
+          .slice(0, 40)
+          .map(
+            (l, i) => `
+          <div class="log-item ${l.ok ? 'ok' : 'err'}" onclick="inspectLog(${i})">
+            <div><strong>${l.method}</strong> <code>${l.path}</code> → <strong>${l.status || 'ERR'}</strong> (${l.ms}ms)</div>
+          </div>`,
+          )
+          .join('');
+      }
+      function inspectLog(i) {
+        const l = state.logs[i];
+        if (!l) return;
+        state.lastCurl = l.curl;
+        $('respStatus').textContent = l.status ? `HTTP ${l.status}` : 'ERR';
+        $('respStatus').className = `pill ${l.ok ? 'ok' : 'err'}`;
+        $('respTime').textContent = `${l.ms} ms`;
+        $('respMeta').textContent = `${l.method} ${l.path}`;
+        $('respBody').textContent = typeof l.parsed === 'string' ? l.parsed : JSON.stringify(l.parsed, null, 2);
+      }
+      function clearLogs() { state.logs = []; renderLogs(); }
+      function copyLastCurl() {
+        if (state.lastCurl) navigator.clipboard?.writeText(state.lastCurl);
+      }
+
+      function walletHeaders() {
+        const cfg = getCfg();
+        const h = {};
+        if (cfg.walletKey) h['X-Wallet-Gateway-Key'] = cfg.walletKey;
+        if (cfg.walletKey) h['X-Wallet-User-Id'] = cfg.userId;
+        return h;
+      }
+      function internalHeaders() {
+        const cfg = getCfg();
+        const h = { 'X-Operator-Id': cfg.operatorId };
+        if (cfg.internalKey) h['X-Internal-Api-Key'] = cfg.internalKey;
+        return h;
+      }
+
+      // --- Guided Flow Helpers ---
+      async function stepDepositInit() {
+        const cfg = getCfg();
+        const key = uuid();
+        state.lastIdempotencyKey = key;
+        return apiCall({
+          method: 'POST',
+          path: '/deposits',
+          headers: { ...walletHeaders(), 'Idempotency-Key': key },
+          body: { userId: cfg.userId, amount: '500000' },
+        });
+      }
+      async function stepSimPay(result) {
+        if (!state.pspToken) return alert('Run step 1 (Initiate Deposit) first so pspToken is captured.');
+        return apiCall({
+          method: 'POST',
+          path: `/test-console/sim-pay/${encodeURIComponent(state.pspToken)}`,
+          body: { result },
+        });
+      }
+      async function stepPspCallback(status) {
+        if (!state.pspToken) return alert('No pspToken captured yet.');
+        return apiCall({
+          method: 'POST',
+          path: '/webhooks/psp/callback',
+          body: { token: state.pspToken, orderId: state.depositId || undefined, status },
+        });
+      }
+      async function stepCheckDeposit() {
+        if (!state.depositId) return alert('No depositId captured yet.');
+        return apiCall({ method: 'GET', path: `/deposits/${state.depositId}`, headers: walletHeaders() });
+      }
+      async function stepCheckWallet() {
+        const cfg = getCfg();
+        await apiCall({ method: 'GET', path: `/wallets/${encodeURIComponent(cfg.userId)}`, headers: walletHeaders() });
+        return apiCall({ method: 'GET', path: `/wallets/${encodeURIComponent(cfg.userId)}/ledger?limit=20`, headers: walletHeaders() });
+      }
+      async function runFlow1() {
+        const r = await stepDepositInit();
+        if (!r.ok) return;
+        const sim = await stepSimPay('success');
+        if (sim.ok) await stepPspCallback('SUCCESS');
+        await stepCheckDeposit();
+        await stepCheckWallet();
+      }
+
+      async function stepFundUser(currency, amount) {
+        const cfg = getCfg();
+        const key = uuid();
+        state.lastIdempotencyKey = key;
+        return apiCall({
+          method: 'POST',
+          path: '/internal/adjustments',
+          headers: { ...internalHeaders(), 'Idempotency-Key': key },
+          body: { userId: cfg.userId, currency, amount, reason: `Test console funding (${currency})` },
+        });
+      }
+      async function stepCreateWithdrawal(currency, amount) {
+        const cfg = getCfg();
+        const key = uuid();
+        state.lastIdempotencyKey = key;
+        return apiCall({
+          method: 'POST',
+          path: '/withdrawals',
+          headers: { ...walletHeaders(), 'Idempotency-Key': key },
+          body: {
+            userId: cfg.userId,
+            currency,
+            amount,
+            destination: currency === 'USDT' ? 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE' : 'IR820540102680020817909002',
+          },
+        });
+      }
+      async function stepCancelWithdrawal() {
+        if (!state.withdrawalId) return alert('Create a withdrawal first.');
+        const cfg = getCfg();
+        const key = uuid();
+        state.lastIdempotencyKey = key;
+        return apiCall({
+          method: 'POST',
+          path: `/withdrawals/${state.withdrawalId}/cancel`,
+          headers: { ...walletHeaders(), 'Idempotency-Key': key },
+          body: { userId: cfg.userId },
+        });
+      }
+      async function stepPayoutWebhook(status) {
+        if (!state.withdrawalId) return alert('Create a withdrawal first.');
+        return apiCall({
+          method: 'POST',
+          path: '/webhooks/payout',
+          signWebhook: true,
+          body: {
+            requestId: state.payoutRequestId || state.withdrawalId,
+            status,
+            providerRefId: `SIM-REF-${Date.now()}`,
+            failureReason: status === 'FAILED' ? 'Simulated bank rejection' : undefined,
+          },
+        });
+      }
+      async function runFlow2Cancel() {
+        await stepFundUser('IRT', '300000');
+        const w = await stepCreateWithdrawal('IRT', '150000');
+        if (w.ok) await stepCancelWithdrawal();
+        await stepCheckWallet();
+      }
+      async function runFlow3Bonus() {
+        const cfg = getCfg();
+        await stepFundUser('USDT', '50.000000');
+        await apiCall({
+          method: 'POST',
+          path: '/transfers',
+          headers: { ...walletHeaders(), 'Idempotency-Key': uuid() },
+          body: { fromUserId: cfg.userId, toUserId: cfg.userId2, currency: 'USDT', amount: '12.500000' },
+        });
+        await stepCreateWithdrawal('USDT', '15.000000');
+        await stepCheckWallet();
+      }
+
+      async function runIdempotencyTest() {
+        const cfg = getCfg();
+        const key = uuid();
+        state.lastIdempotencyKey = key;
+        const headers = { ...internalHeaders(), 'Idempotency-Key': key };
+        await apiCall({ method: 'POST', path: '/internal/adjustments', headers, body: { userId: cfg.userId, currency: 'IRT', amount: '10000', reason: 'Idempotency test #1' } });
+        await apiCall({ method: 'POST', path: '/internal/adjustments', headers, body: { userId: cfg.userId, currency: 'IRT', amount: '10000', reason: 'Idempotency test #1' } });
+        await apiCall({ method: 'POST', path: '/internal/adjustments', headers, body: { userId: cfg.userId, currency: 'IRT', amount: '99999', reason: 'Idempotency mismatch' } });
+      }
+
+      async function runConcurrencyBurst() {
+        const burstUser = `burst_${Date.now()}`;
+        await apiCall({
+          method: 'POST',
+          path: '/internal/adjustments',
+          headers: { ...internalHeaders(), 'Idempotency-Key': uuid() },
+          body: { userId: burstUser, currency: 'IRT', amount: '200000', reason: 'Concurrency burst seed' },
+        });
+        const cfg = getCfg();
+        const gwHeaders = cfg.walletKey ? { 'X-Wallet-Gateway-Key': cfg.walletKey, 'X-Wallet-User-Id': burstUser } : {};
+        await Promise.all(
+          Array.from({ length: 10 }, () =>
+            apiCall({
+              method: 'POST',
+              path: '/withdrawals',
+              headers: { ...gwHeaders, 'Idempotency-Key': uuid() },
+              body: { userId: burstUser, currency: 'IRT', amount: '100000', destination: 'IR820540102680020817909002' },
+            }),
+          ),
+        );
+        await apiCall({ method: 'GET', path: `/wallets/${burstUser}`, headers: gwHeaders });
+      }
+
+      // --- Generic Endpoint Cards ---
+      const ENDPOINTS = {
+        wallets: [
+          {
+            method: 'GET',
+            path: '/wallets/{userId}',
+            desc: 'Returns IRT & USDT balances (available, locked, receivable) and outboundFrozen flag. Auto-returns 0 balances for unseen users.',
+            params: [{ name: 'userId', value: () => getCfg().userId }],
+            headers: walletHeaders,
+          },
+          {
+            method: 'GET',
+            path: '/wallets/{userId}/ledger',
+            desc: 'Keyset-paginated immutable double-entry ledger entries. Filter optionally by currency (IRT/USDT), accountType (AVAILABLE/LOCKED/RECEIVABLE), limit, cursor.',
+            params: [
+              { name: 'userId', value: () => getCfg().userId },
+              { name: 'query', value: () => 'limit=20' },
+            ],
+            headers: walletHeaders,
+            buildPath: (p) => `/wallets/${encodeURIComponent(p.userId)}/ledger${p.query ? '?' + p.query : ''}`,
+          },
+        ],
+        deposits: [
+          {
+            method: 'POST',
+            path: '/deposits',
+            desc: 'Initiates an IRT PSP deposit using a leased idempotency slot and returns {depositId, status, paymentUrl}.',
+            idempotent: true,
+            headers: walletHeaders,
+            body: () => ({ userId: getCfg().userId, amount: '500000' }),
+          },
+          {
+            method: 'GET',
+            path: '/deposits/{id}',
+            desc: 'Gets current deposit status and PSP reference.',
+            params: [{ name: 'id', value: () => state.depositId || '00000000-0000-0000-0000-000000000000' }],
+            headers: walletHeaders,
+          },
+          {
+            method: 'POST',
+            path: '/webhooks/psp/callback',
+            desc: 'Unsigned PSP wake-up callback. Triggers server-side verification against PSP /psp/verify before crediting the user.',
+            body: () => ({ token: state.pspToken || 'psp-token', orderId: state.depositId || undefined, status: 'SUCCESS' }),
+          },
+        ],
+        withdrawals: [
+          {
+            method: 'POST',
+            path: '/withdrawals',
+            desc: 'Creates an IRT (min 100,000, fee 0) or USDT (min 10, fee 1) withdrawal with atomic balance lock & 200M IRT daily limit check.',
+            idempotent: true,
+            headers: walletHeaders,
+            body: () => ({
+              userId: getCfg().userId,
+              currency: 'IRT',
+              amount: '150000',
+              destination: 'IR820540102680020817909002',
+            }),
+          },
+          {
+            method: 'GET',
+            path: '/withdrawals/{id}',
+            desc: 'Gets withdrawal state (PENDING_DISPATCH, DISPATCHING, PROCESSING, SUCCEEDED, FAILED, MANUAL_REVIEW).',
+            params: [{ name: 'id', value: () => state.withdrawalId || '00000000-0000-0000-0000-000000000000' }],
+            headers: walletHeaders,
+          },
+          {
+            method: 'POST',
+            path: '/withdrawals/{id}/cancel',
+            desc: 'Cancels a withdrawal strictly while in PENDING_DISPATCH, releasing locked funds & daily limit.',
+            idempotent: true,
+            params: [{ name: 'id', value: () => state.withdrawalId || '00000000-0000-0000-0000-000000000000' }],
+            headers: walletHeaders,
+            body: () => ({ userId: getCfg().userId }),
+          },
+          {
+            method: 'POST',
+            path: '/webhooks/payout',
+            desc: 'HMAC-SHA256 signed payout webhook. Console automatically computes x-signature using your Webhook Secret.',
+            signWebhook: true,
+            body: () => ({
+              requestId: state.payoutRequestId || state.withdrawalId || 'req-id',
+              status: 'SUCCEEDED',
+              providerRefId: `BANK-REF-${Date.now()}`,
+            }),
+          },
+        ],
+        transfers: [
+          {
+            method: 'POST',
+            path: '/transfers',
+            bonus: true,
+            desc: 'Atomic P2P internal transfer (IRT or USDT) using canonical account lock ordering to prevent deadlocks.',
+            idempotent: true,
+            headers: walletHeaders,
+            body: () => ({
+              fromUserId: getCfg().userId,
+              toUserId: getCfg().userId2,
+              currency: 'IRT',
+              amount: '50000',
+            }),
+          },
+        ],
+        ops: [
+          {
+            method: 'POST',
+            path: '/internal/adjustments',
+            desc: 'Manual ops balance credit with double-entry audit trail (SYSTEM:OPS_ADJUSTMENT -> USER:AVAILABLE).',
+            idempotent: true,
+            headers: internalHeaders,
+            body: () => ({
+              userId: getCfg().userId,
+              currency: 'IRT',
+              amount: '500000',
+              reason: 'Manual compensation credit',
+            }),
+          },
+          {
+            method: 'POST',
+            path: '/internal/controls/withdrawals-pause',
+            desc: 'Circuit breaker: pauses or resumes outbound withdrawals per currency (pass [] to resume all).',
+            idempotent: true,
+            headers: internalHeaders,
+            body: () => ({ currencies: ['USDT'], reason: 'Incident drill' }),
+          },
+          {
+            method: 'POST',
+            path: '/internal/receivables/settle',
+            desc: 'Settles USER:RECEIVABLE shortfall from USER:AVAILABLE and unfreezes outbound operations once zero.',
+            idempotent: true,
+            headers: internalHeaders,
+            body: () => ({ userId: getCfg().userId, currency: 'IRT' }),
+          },
+          {
+            method: 'POST',
+            path: '/internal/withdrawals/{id}/resolve',
+            desc: 'Manually resolves a withdrawal stuck in MANUAL_REVIEW as SUCCEEDED or FAILED.',
+            idempotent: true,
+            params: [{ name: 'id', value: () => state.withdrawalId || '00000000-0000-0000-0000-000000000000' }],
+            headers: internalHeaders,
+            body: () => ({ outcome: 'SUCCEEDED', reason: 'Confirmed by bank ops', providerRefId: 'BANK-OPS-101' }),
+          },
+          {
+            method: 'POST',
+            path: '/reconciliation/run',
+            bonus: true,
+            desc: 'Read-only daily settlement CSV reconciliation against PSP /psp/settlement?date=YYYY-MM-DD.',
+            headers: internalHeaders,
+            body: () => ({ date: todayUtc() }),
+          },
+        ],
+        health: [
+          { method: 'GET', path: '/health', desc: 'Basic service liveness/health summary.' },
+          { method: 'GET', path: '/health/liveness', desc: 'Kubernetes liveness probe.' },
+          { method: 'GET', path: '/health/readiness', desc: 'Kubernetes readiness probe (checks DB connectivity).' },
+          { method: 'GET', path: '/internal/metrics', desc: 'JSON operational counters (discrepancies, manual review backlog, outbox lag, drift).', headers: internalHeaders },
+          { method: 'GET', path: '/internal/metrics/prometheus', desc: 'Prometheus 0.0.4 text exposition metrics.', headers: internalHeaders },
+        ],
+      };
+
+      function renderEndpointTabs() {
+        Object.entries(ENDPOINTS).forEach(([tab, list]) => {
+          const container = $(`tab-${tab}`);
+          container.innerHTML = list
+            .map((ep, idx) => {
+              const id = `${tab}_${idx}`;
+              const paramsHtml = (ep.params || [])
+                .map(
+                  (p) => `
+                  <div class="field">
+                    <label>${p.name}</label>
+                    <input id="p_${id}_${p.name}" value="" placeholder="${p.name}" />
+                  </div>`,
+                )
+                .join('');
+              const idemHtml = ep.idempotent
+                ? `<div class="field">
+                    <label>Idempotency-Key</label>
+                    <div style="display:flex;gap:6px;">
+                      <input id="idem_${id}" value="${uuid()}" />
+                      <button type="button" class="secondary" onclick="$('idem_${id}').value=uuid()">New</button>
+                    </div>
+                  </div>`
+                : '';
+              const bodyHtml = ep.body
+                ? `<div class="field" style="margin-top:8px;">
+                    <label>JSON Body</label>
+                    <textarea id="body_${id}"></textarea>
+                  </div>`
+                : '';
+              return `
+                <div class="card">
+                  <div class="card-head">
+                    <div class="title-row">
+                      <span class="badge ${ep.method}">${ep.method}</span>
+                      ${ep.bonus ? '<span class="badge BONUS">BONUS</span>' : ''}
+                      <span class="PATH">${ep.path}</span>
+                    </div>
+                    <div class="btn-row" style="margin:0">
+                      <button type="button" class="secondary" onclick="fillSample('${tab}', ${idx})">Reset Sample</button>
+                      <button type="button" onclick="sendCard('${tab}', ${idx})">Send Request</button>
+                    </div>
+                  </div>
+                  <p class="desc">${ep.desc}</p>
+                  <div class="grid-2">${paramsHtml}${idemHtml}</div>
+                  ${bodyHtml}
+                </div>`;
+            })
+            .join('');
+          list.forEach((_, idx) => fillSample(tab, idx));
+        });
+      }
+
+      function fillSample(tab, idx) {
+        const ep = ENDPOINTS[tab][idx];
+        const id = `${tab}_${idx}`;
+        (ep.params || []).forEach((p) => {
+          const el = $(`p_${id}_${p.name}`);
+          if (el) el.value = p.value();
+        });
+        if (ep.idempotent && $(`idem_${id}`)) $(`idem_${id}`).value = uuid();
+        if (ep.body && $(`body_${id}`)) $(`body_${id}`).value = JSON.stringify(ep.body(), null, 2);
+      }
+
+      async function sendCard(tab, idx) {
+        const ep = ENDPOINTS[tab][idx];
+        const id = `${tab}_${idx}`;
+        const paramValues = {};
+        (ep.params || []).forEach((p) => {
+          paramValues[p.name] = $(`p_${id}_${p.name}`).value.trim();
+        });
+        let path = ep.buildPath ? ep.buildPath(paramValues) : ep.path;
+        Object.entries(paramValues).forEach(([k, v]) => {
+          path = path.replace(`{${k}}`, encodeURIComponent(v));
+        });
+        const headers = ep.headers ? ep.headers() : {};
+        if (ep.idempotent) {
+          const key = $(`idem_${id}`).value.trim();
+          headers['Idempotency-Key'] = key;
+          state.lastIdempotencyKey = key;
+        }
+        let body = null;
+        if (ep.body) {
+          const raw = $(`body_${id}`).value;
+          try { body = JSON.parse(raw); } catch { body = raw; }
+        }
+        await apiCall({ method: ep.method, path, headers, body, signWebhook: Boolean(ep.signWebhook) });
+      }
+
+      document.querySelectorAll('.tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
+          document.querySelectorAll('.tab-panel').forEach((p) => p.classList.add('hidden'));
+          btn.classList.add('active');
+          $(`tab-${btn.dataset.tab}`).classList.remove('hidden');
+        });
+      });
+
+      initDefaults();
+    </script>
+  </body>
+</html>

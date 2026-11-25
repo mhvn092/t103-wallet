@@ -6,6 +6,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 import { configureApp } from './app.setup.js';
 import type { EnvConfig } from './config/env.validation.js';
+import { registerLocalTestConsole } from './test-console.util.js';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -14,7 +15,9 @@ async function bootstrap(): Promise<void> {
   });
 
   const config = app.get(ConfigService<EnvConfig, true>);
-  const isProd = config.get('APP_ENV', { infer: true }) === 'production';
+  const appEnv = config.get('APP_ENV', { infer: true });
+  const isProd = appEnv === 'production';
+  const isLocal = appEnv === 'local';
 
   const trustProxy = config.get('TRUST_PROXY', { infer: true });
   if (trustProxy !== undefined) {
@@ -41,6 +44,10 @@ async function bootstrap(): Promise<void> {
   );
   app.enableShutdownHooks();
   configureApp(app);
+
+  if (isLocal) {
+    registerLocalTestConsole(app, config.get('PSP_BASE_URL', { infer: true }));
+  }
 
   if (config.get('SWAGGER_ENABLED', { infer: true })) {
     const swaggerConfig = new DocumentBuilder()

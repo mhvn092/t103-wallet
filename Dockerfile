@@ -20,6 +20,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force && chown -R no
 
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/drizzle ./drizzle
+COPY --chown=node:node public ./public
 
 USER node
 EXPOSE 3000

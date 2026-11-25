@@ -214,23 +214,49 @@ export class AmqpBrokerClient implements OnModuleDestroy {
     try {
       parsedPayload = JSON.parse(rawMsg.content.toString('utf8'));
     } catch {
-      channel.nack(rawMsg, false, false);
+      this._nackSafely(channel, rawMsg, false);
       return;
     }
 
     if (!rawEventId) {
-      channel.nack(rawMsg, false, false);
+      this._nackSafely(channel, rawMsg, false);
       return;
     }
 
     try {
       await handler({ eventId: rawEventId, payload: parsedPayload });
-      channel.ack(rawMsg);
+      this._ackSafely(channel, rawMsg);
     } catch (err) {
       this._logger.warn(
         `AMQP consumer deferred delivery for event=${rawEventId}: ${sanitizeBrokerError(err)}`,
       );
-      channel.nack(rawMsg, false, true);
+      this._nackSafely(channel, rawMsg, true);
+    }
+  }
+
+  private _ackSafely(channel: Channel, rawMsg: ConsumeMessage): void {
+    if (this._destroyed || this._consumerChannel !== channel) {
+      return;
+    }
+    try {
+      channel.ack(rawMsg);
+    } catch {
+      // Connection/channel closed during shutdown; broker will redeliver unacked message.
+    }
+  }
+
+  private _nackSafely(
+    channel: Channel,
+    rawMsg: ConsumeMessage,
+    requeue: boolean,
+  ): void {
+    if (this._destroyed || this._consumerChannel !== channel) {
+      return;
+    }
+    try {
+      channel.nack(rawMsg, false, requeue);
+    } catch {
+      // Connection/channel closed during shutdown; broker will redeliver unacked message.
     }
   }
 
