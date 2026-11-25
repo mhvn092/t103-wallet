@@ -32,10 +32,8 @@ services:
       retries: 15
 
   simulator:
-    build:
-      context: ./simulator
-      dockerfile: Dockerfile
     image: hamtapay/t103-simulator:1.0
+    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

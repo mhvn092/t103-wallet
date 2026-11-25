@@ -52,9 +52,9 @@ Before any spec or code was written, the solution was anchored on a few concrete
 
 ## Quick Start (`Docker Compose`)
 
-1. Load the external simulator image (once):
+1. From `t103-wallet/`, load the supplied simulator image. Reload it if you previously built a local simulator under the same tag.
    ```bash
-   docker load -i ../t103-simulator.tar.gz
+   docker load -i t103-simulator.tar.gz
    ```
 2. Start PostgreSQL 18, RabbitMQ 4, Simulator (`SIM_CHAOS=default` or `hostile`), automatic lock-serialized DB migrations, and the NestJS API directly (safe local defaults are built in; optionally copy `.env.example` to `.env` to customize):
    ```bash
