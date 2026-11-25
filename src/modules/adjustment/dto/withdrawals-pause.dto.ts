@@ -8,7 +8,10 @@ import {
   MaxLength,
 } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator.js';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
+import {
+  CURRENCIES,
+  type CurrencyEnum,
+} from '../../../common/enums/currency.enum.js';
 
 export class WithdrawalsPauseDto {
   @ApiProperty({
@@ -21,7 +24,7 @@ export class WithdrawalsPauseDto {
   @IsArray()
   @ArrayUnique()
   @IsIn(CURRENCIES, { each: true })
-  currencies!: Currency[];
+  currencies!: CurrencyEnum[];
 
   @ApiPropertyOptional({ example: '02:10 deployment incident containment' })
   @IsOptional()

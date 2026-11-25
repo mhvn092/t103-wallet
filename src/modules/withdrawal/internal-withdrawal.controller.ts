@@ -6,7 +6,6 @@ import {
   HttpStatus,
   Param,
   Post,
-  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -16,7 +15,6 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
 import { InternalOpsGuard } from '../adjustment/internal-ops.guard.js';
 import {
@@ -67,7 +65,6 @@ export class InternalWithdrawalController {
     @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: WithdrawalResolveDto,
     @Headers('x-operator-id') rawOperatorId: string | undefined,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<WithdrawalResponseDto> {
     const operatorId = rawOperatorId?.trim() || 'system-ops';
     const result = await this._withdrawalService.resolveManualReview({
@@ -77,7 +74,6 @@ export class InternalWithdrawalController {
       dto,
       operatorId,
     });
-    res.status(result.statusCode);
     return result.body;
   }
 }

@@ -11,14 +11,14 @@ import { ErrorCode } from '../../common/errors/error-codes.js';
 import { isRecord } from '../../common/filters/exception-response.util.js';
 import { sha256CanonicalJson } from '../../common/utils/canonical-json.util.js';
 import { DatabaseService } from '../../database/database.service.js';
-import { idempotencyKeys } from '../../database/schema/index.js';
+import { idempotencyKeys } from '../../database/schema/operations.schema.js';
 import {
   IDEMPOTENCY_REQUEST_CTX,
   IDEMPOTENCY_ROUTE_META,
   type RequestWithIdempotency,
   extractValidatedIdempotencyKey,
 } from './idempotency.decorator.js';
-import type { IdempotencyRouteConfig } from './idempotency.types.js';
+import type { IdempotencyRouteConfigInterface } from './idempotency.interface.js';
 import { userIdempotencyScope } from './idempotency.util.js';
 
 @Injectable()
@@ -30,7 +30,7 @@ export class IdempotencyPreCheckGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const config = this._reflector.getAllAndOverride<
-      IdempotencyRouteConfig | undefined
+      IdempotencyRouteConfigInterface | undefined
     >(IDEMPOTENCY_ROUTE_META, [context.getHandler(), context.getClass()]);
     if (!config) {
       return true;

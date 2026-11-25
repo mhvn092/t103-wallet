@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Currency } from '../../common/enums/domain.enums.js';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
 import { IntervalWorkerBase } from '../../common/workers/interval-worker.base.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { InternalOpsService } from './internal-ops.service.js';
@@ -33,7 +33,7 @@ export class DriftAuditWorker extends IntervalWorkerBase {
         `CRITICAL: Balance drift detected on ${driftCount} USER account(s); tripping automatic withdrawal pause circuit breaker`,
       );
       await this._internalOpsService.setPausedWithdrawals({
-        currencies: [Currency.IRT, Currency.USDT],
+        currencies: [CurrencyEnum.IRT, CurrencyEnum.USDT],
         reason: `AUTO_CIRCUIT_BREAKER: balance drift detected on ${driftCount} USER account(s)`,
       });
     }

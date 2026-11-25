@@ -1,5 +1,6 @@
+import type { WithdrawalPolicyAmountsInterface } from './withdrawal.interface.js';
 import type { ConfigService } from '@nestjs/config';
-import { Currency } from '../../common/enums/domain.enums.js';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
 import {
   convertUsdtToIrtCeiling,
   formatMinorToApi,
@@ -8,21 +9,18 @@ import {
 import type { EnvConfig } from '../../config/env.validation.js';
 import { parseIrrToIrt } from '../providers/provider-http.util.js';
 import type { WithdrawalResponseDto } from './dto/withdrawal-response.dto.js';
-import type {
-  WithdrawalEntity,
-  WithdrawalPolicyAmounts,
-} from './withdrawal.types.js';
+import type { WithdrawalEntity } from './withdrawal.types.js';
 
 export function computeWithdrawalPolicyAmounts(
   configService: ConfigService<EnvConfig, true>,
   amountMinor: bigint,
-  currency: Currency,
-): WithdrawalPolicyAmounts {
+  currency: CurrencyEnum,
+): WithdrawalPolicyAmountsInterface {
   const dailyLimitIrt = parseAmountToMinor(
     configService.get('DAILY_LIMIT_IRT', { infer: true }),
-    Currency.IRT,
+    CurrencyEnum.IRT,
   );
-  if (currency === Currency.IRT) {
+  if (currency === CurrencyEnum.IRT) {
     return {
       feeMinor: 0n,
       fxRateIrt: 1n,
@@ -33,12 +31,12 @@ export function computeWithdrawalPolicyAmounts(
 
   const feeMinor = parseAmountToMinor(
     configService.get('USDT_WITHDRAWAL_FEE', { infer: true }),
-    Currency.USDT,
+    CurrencyEnum.USDT,
     { allowZero: true },
   );
   const fxRateIrt = parseAmountToMinor(
     configService.get('USDT_IRT_RATE', { infer: true }),
-    Currency.IRT,
+    CurrencyEnum.IRT,
   );
   return {
     feeMinor,
@@ -49,17 +47,17 @@ export function computeWithdrawalPolicyAmounts(
 }
 
 export function isWebhookAmountValid(
-  expectedCurrency: Currency,
+  expectedCurrency: CurrencyEnum,
   expectedMinor: bigint,
   providedAmount: string | number,
   providedCurrency?: string | null,
 ): boolean {
   const normCcy = providedCurrency?.trim().toUpperCase();
   try {
-    if (expectedCurrency === Currency.IRT) {
-      if (normCcy === Currency.IRT) {
+    if (expectedCurrency === CurrencyEnum.IRT) {
+      if (normCcy === CurrencyEnum.IRT) {
         return (
-          parseAmountToMinor(String(providedAmount), Currency.IRT) ===
+          parseAmountToMinor(String(providedAmount), CurrencyEnum.IRT) ===
           expectedMinor
         );
       }
@@ -71,7 +69,7 @@ export function isWebhookAmountValid(
       );
     }
     return (
-      parseAmountToMinor(String(providedAmount), Currency.USDT) ===
+      parseAmountToMinor(String(providedAmount), CurrencyEnum.USDT) ===
       expectedMinor
     );
   } catch {

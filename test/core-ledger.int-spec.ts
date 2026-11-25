@@ -15,14 +15,16 @@ import {
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
 import {
-  AccountOwnerType,
-  AccountType,
-  Currency,
-  LedgerDirection,
-  LedgerRefType,
-  LedgerTxType,
-} from '../src/common/enums/domain.enums.js';
-import { generateUuidV7 } from '../src/common/utils/uuidv7.util.js';
+  AccountOwnerTypeEnum,
+  AccountTypeEnum,
+} from '../src/common/enums/account.enums.js';
+import { CurrencyEnum } from '../src/common/enums/currency.enum.js';
+import {
+  LedgerDirectionEnum,
+  LedgerRefTypeEnum,
+  LedgerTxTypeEnum,
+} from '../src/common/enums/ledger.enums.js';
+import { v7 as generateUuidV7 } from 'uuid';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
 import { RetentionWorker } from '../src/modules/idempotency/retention.worker.js';
@@ -119,21 +121,21 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
 
     const sysAccount = {
       id: '01900000-0000-7000-8000-000000000003',
-      ownerType: AccountOwnerType.SYSTEM,
+      ownerType: AccountOwnerTypeEnum.SYSTEM,
       ownerId: 'OPS_ADJUSTMENT',
-      currency: Currency.IRT,
-      accountType: AccountType.ADJUSTMENT,
-      normalSide: LedgerDirection.DEBIT,
+      currency: CurrencyEnum.IRT,
+      accountType: AccountTypeEnum.ADJUSTMENT,
+      normalSide: LedgerDirectionEnum.DEBIT,
       balance: null,
       createdAt: new Date(),
     };
     const userAccount = {
       id: u1,
-      ownerType: AccountOwnerType.USER,
+      ownerType: AccountOwnerTypeEnum.USER,
       ownerId: userId,
-      currency: Currency.USDT,
-      accountType: AccountType.AVAILABLE,
-      normalSide: LedgerDirection.CREDIT,
+      currency: CurrencyEnum.USDT,
+      accountType: AccountTypeEnum.AVAILABLE,
+      normalSide: LedgerDirectionEnum.CREDIT,
       balance: '0',
       createdAt: new Date(),
     };
@@ -141,19 +143,19 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
     await expect(
       database.runInTransaction((tx) =>
         ledgerService.postTransaction(tx, {
-          type: LedgerTxType.OPS_ADJ,
-          referenceType: LedgerRefType.ADJUSTMENT,
+          type: LedgerTxTypeEnum.OPS_ADJ,
+          referenceType: LedgerRefTypeEnum.ADJUSTMENT,
           referenceId: generateUuidV7(),
           description: 'bad cross ccy',
           postings: [
             {
               account: sysAccount,
-              direction: LedgerDirection.DEBIT,
+              direction: LedgerDirectionEnum.DEBIT,
               amount: 1000n,
             },
             {
               account: userAccount,
-              direction: LedgerDirection.CREDIT,
+              direction: LedgerDirectionEnum.CREDIT,
               amount: 1000n,
             },
           ],

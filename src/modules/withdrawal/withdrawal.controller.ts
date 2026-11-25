@@ -6,7 +6,6 @@ import {
   HttpStatus,
   Param,
   Post,
-  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -17,7 +16,6 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import { UserScopedDto } from '../../common/dto/user-scoped.dto.js';
 import {
   ApiErrorResponses,
@@ -66,14 +64,12 @@ export class WithdrawalController {
     @RequireIdempotencyKey() idempotencyKey: string,
     @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: WithdrawalCreateDto,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<WithdrawalResponseDto> {
     const result = await this._withdrawalService.createWithdrawal({
       idempotencyKey,
       requestHash,
       dto,
     });
-    res.status(result.statusCode);
     return result.body;
   }
 
@@ -127,7 +123,6 @@ export class WithdrawalController {
     @Body() dto: UserScopedDto,
     @RequireIdempotencyKey() idempotencyKey: string,
     @IdempotencyRequestHash() requestHash: string | undefined,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<WithdrawalResponseDto> {
     const result = await this._withdrawalService.cancelWithdrawal({
       withdrawalId: id,
@@ -135,7 +130,6 @@ export class WithdrawalController {
       idempotencyKey,
       requestHash,
     });
-    res.status(result.statusCode);
     return result.body;
   }
 }

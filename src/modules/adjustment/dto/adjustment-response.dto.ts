@@ -1,5 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
+import {
+  CURRENCIES,
+  type CurrencyEnum,
+} from '../../../common/enums/currency.enum.js';
 
 export class AdjustmentResponseDto {
   @ApiProperty({ format: 'uuid' })
@@ -9,7 +12,7 @@ export class AdjustmentResponseDto {
   userId!: string;
 
   @ApiProperty({ enum: CURRENCIES, example: 'IRT' })
-  currency!: Currency;
+  currency!: CurrencyEnum;
 
   @ApiProperty({ example: '500000' })
   amount!: string;

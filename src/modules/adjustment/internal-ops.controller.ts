@@ -7,7 +7,6 @@ import {
   HttpCode,
   HttpStatus,
   Post,
-  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -17,7 +16,6 @@ import {
   ApiProduces,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
 import {
   IdempotencyRequestHash,
@@ -66,7 +64,6 @@ export class InternalOpsController {
     @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: ReceivableSettleDto,
     @Headers('x-operator-id') rawOperatorId: string | undefined,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<ReceivableSettleResponseDto> {
     const operatorId = rawOperatorId?.trim() || 'system-ops';
     const result = await this._internalOpsService.settleReceivable({
@@ -75,7 +72,6 @@ export class InternalOpsController {
       dto,
       operatorId,
     });
-    res.status(result.statusCode);
     return result.body;
   }
 
@@ -102,14 +98,12 @@ export class InternalOpsController {
     @RequireIdempotencyKey() idempotencyKey: string,
     @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: WithdrawalsPauseDto,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<WithdrawalsPauseResponseDto> {
     const result = await this._internalOpsService.updateWithdrawalPause({
       dto,
       idempotencyKey,
       requestHash,
     });
-    res.status(result.statusCode);
     return result.body;
   }
 

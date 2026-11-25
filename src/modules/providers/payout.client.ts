@@ -1,16 +1,17 @@
+import { parseValidated } from '../../common/utils/parse-validated.util.js';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
 import {
-  Currency,
-  PayoutCurrency,
-  PayoutTransferType,
-} from '../../common/enums/domain.enums.js';
+  PayoutCurrencyEnum,
+  PayoutTransferTypeEnum,
+} from '../../common/enums/provider.enums.js';
 import { formatMinorToApi } from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import {
-  payoutAcceptedSchema,
-  payoutErrorSchema,
-  payoutInquirySchema,
+  PayoutAcceptedDto,
+  PayoutErrorDto,
+  PayoutInquiryDto,
 } from './payout.schemas.js';
 import {
   requestProviderJson,
@@ -36,14 +37,14 @@ export class PayoutClient {
 
   async createTransfer(params: {
     requestId: string;
-    currency: Currency;
+    currency: CurrencyEnum;
     amountMinor: bigint;
     destination: string;
   }): Promise<PayoutCreateResult> {
     const payloadAmount =
-      params.currency === Currency.IRT
+      params.currency === CurrencyEnum.IRT
         ? toSafeIrrPayloadAmount(params.amountMinor * 10n)
-        : formatMinorToApi(params.amountMinor, Currency.USDT);
+        : formatMinorToApi(params.amountMinor, CurrencyEnum.USDT);
 
     const outcome = await requestProviderJson({
       config: this._configService,
@@ -53,15 +54,15 @@ export class PayoutClient {
       body: {
         requestId: params.requestId,
         type:
-          params.currency === Currency.IRT
-            ? PayoutTransferType.IBAN
-            : PayoutTransferType.CRYPTO,
+          params.currency === CurrencyEnum.IRT
+            ? PayoutTransferTypeEnum.IBAN
+            : PayoutTransferTypeEnum.CRYPTO,
         destination: params.destination,
         amount: payloadAmount,
         currency:
-          params.currency === Currency.IRT
-            ? PayoutCurrency.IRR
-            : PayoutCurrency.USDT,
+          params.currency === CurrencyEnum.IRT
+            ? PayoutCurrencyEnum.IRR
+            : PayoutCurrencyEnum.USDT,
       },
     });
 
@@ -70,7 +71,7 @@ export class PayoutClient {
     }
 
     if (outcome.status === 200 || outcome.status === 202) {
-      const parsed = payoutAcceptedSchema.safeParse(outcome.data);
+      const parsed = parseValidated(PayoutAcceptedDto, outcome.data);
       const trackingId = parsed.success
         ? (parsed.data.trackingId ?? parsed.data.id ?? params.requestId)
         : params.requestId;
@@ -78,7 +79,7 @@ export class PayoutClient {
     }
 
     if (outcome.status === 400 || outcome.status === 422) {
-      const parsedErr = payoutErrorSchema.safeParse(outcome.data);
+      const parsedErr = parseValidated(PayoutErrorDto, outcome.data);
       const reason = parsedErr.success
         ? (parsedErr.data.reason ?? parsedErr.data.error)
         : null;
@@ -116,7 +117,7 @@ export class PayoutClient {
       };
     }
 
-    const parsed = payoutInquirySchema.safeParse(outcome.data);
+    const parsed = parseValidated(PayoutInquiryDto, outcome.data);
     if (!parsed.success) {
       return {
         kind: 'AMBIGUOUS',

@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { expect } from 'vitest';
-import type { Currency } from '../../src/common/utils/money.util.js';
+import type { CurrencyEnum } from '../../src/common/enums/currency.enum.js';
 
 export async function assertGlobalFinancialInvariants(
   pool: Pool,
@@ -110,7 +110,7 @@ export async function assertGlobalFinancialInvariants(
 export async function fundUserViaAdjustment(params: {
   app: INestApplication<App>;
   userId: string;
-  currency: Currency;
+  currency: CurrencyEnum;
   amount: string;
   idempotencyKey: string;
 }): Promise<void> {

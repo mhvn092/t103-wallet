@@ -1,5 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
+import {
+  CURRENCIES,
+  type CurrencyEnum,
+} from '../../../common/enums/currency.enum.js';
 
 export class ReceivableSettleResponseDto {
   @ApiProperty({ format: 'uuid' })
@@ -9,7 +12,7 @@ export class ReceivableSettleResponseDto {
   userId!: string;
 
   @ApiProperty({ enum: CURRENCIES, example: 'IRT' })
-  currency!: Currency;
+  currency!: CurrencyEnum;
 
   @ApiProperty({ example: '150000' })
   settledAmount!: string;

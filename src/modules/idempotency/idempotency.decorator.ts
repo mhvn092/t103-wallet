@@ -8,22 +8,22 @@ import type { Request } from 'express';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import type {
-  IdempotencyRequestContext,
-  IdempotencyRouteConfig,
-} from './idempotency.types.js';
+  IdempotencyRequestContextInterface,
+  IdempotencyRouteConfigInterface,
+} from './idempotency.interface.js';
 
 export const IDEMPOTENCY_ROUTE_META = Symbol('IDEMPOTENCY_ROUTE_META');
 export const IDEMPOTENCY_REQUEST_CTX = Symbol('IDEMPOTENCY_REQUEST_CTX');
 
 export type RequestWithIdempotency = Request & {
-  [IDEMPOTENCY_REQUEST_CTX]?: IdempotencyRequestContext;
+  [IDEMPOTENCY_REQUEST_CTX]?: IdempotencyRequestContextInterface;
 };
 
 export function IdempotentRoute(
   scope: string,
-  options?: Omit<IdempotencyRouteConfig, 'scope'>,
+  options?: Omit<IdempotencyRouteConfigInterface, 'scope'>,
 ): MethodDecorator {
-  const config: IdempotencyRouteConfig = {
+  const config: IdempotencyRouteConfigInterface = {
     scope,
     ...options,
   };

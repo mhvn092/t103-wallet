@@ -1,8 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  ReconciliationAdjacentMatchType,
-  ReconciliationMismatchType,
-} from '../../../common/enums/domain.enums.js';
+  ReconciliationAdjacentMatchTypeEnum,
+  ReconciliationMismatchTypeEnum,
+} from '../../../common/enums/reconciliation.enums.js';
 
 class ReconciliationSummaryDto {
   @ApiProperty({ example: 12 })
@@ -26,10 +26,10 @@ class ReconciliationSummaryDto {
 
 export class ReconciliationMismatchDto {
   @ApiProperty({
-    enum: ReconciliationMismatchType,
-    example: ReconciliationMismatchType.AMOUNT_MISMATCH,
+    enum: ReconciliationMismatchTypeEnum,
+    example: ReconciliationMismatchTypeEnum.AMOUNT_MISMATCH,
   })
-  type!: ReconciliationMismatchType;
+  type!: ReconciliationMismatchTypeEnum;
 
   @ApiProperty({ example: '1382264189' })
   reference!: string;
@@ -49,10 +49,10 @@ export class ReconciliationMismatchDto {
 
 export class ReconciliationAdjacentDayMatchDto {
   @ApiProperty({
-    enum: ReconciliationAdjacentMatchType,
-    example: ReconciliationAdjacentMatchType.MATCHED_ADJACENT_DAY,
+    enum: ReconciliationAdjacentMatchTypeEnum,
+    example: ReconciliationAdjacentMatchTypeEnum.MATCHED_ADJACENT_DAY,
   })
-  type!: ReconciliationAdjacentMatchType;
+  type!: ReconciliationAdjacentMatchTypeEnum;
 
   @ApiProperty({ example: '1382264189' })
   reference!: string;

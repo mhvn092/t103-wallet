@@ -1,0 +1,19 @@
+export enum WithdrawalStatusEnum {
+  PENDING_DISPATCH = 'PENDING_DISPATCH',
+  DISPATCHING = 'DISPATCHING',
+  PROCESSING = 'PROCESSING',
+  SUCCEEDED = 'SUCCEEDED',
+  FAILED = 'FAILED',
+  MANUAL_REVIEW = 'MANUAL_REVIEW',
+}
+
+export enum WithdrawalOpsOutcomeEnum {
+  SUCCEEDED = 'SUCCEEDED',
+  FAILED = 'FAILED',
+}
+
+export enum WithdrawalFailureReasonEnum {
+  CANCELLED_BY_USER = 'CANCELLED_BY_USER',
+  BANK_RETURNED = 'BANK_RETURNED',
+  PROVIDER_FAILED = 'PROVIDER_FAILED',
+}

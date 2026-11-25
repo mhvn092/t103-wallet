@@ -1,19 +1,19 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
-  LedgerDirection,
-  LedgerRefType,
-  LedgerTxType,
-  UserAccountType,
-} from '../../common/enums/domain.enums.js';
+  LedgerDirectionEnum,
+  LedgerRefTypeEnum,
+  LedgerTxTypeEnum,
+} from '../../common/enums/ledger.enums.js';
+import { UserAccountTypeEnum } from '../../common/enums/account.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   formatMinorToApi,
   parseAmountToMinor,
 } from '../../common/utils/money.util.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
-import { transfers } from '../../database/schema/index.js';
-import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
+import { v7 as generateUuidV7 } from 'uuid';
+import { transfers } from '../../database/schema/operations.schema.js';
+import type { IdempotentExecutionResultInterface } from '../idempotency/idempotency.interface.js';
 import { userIdempotencyScope } from '../idempotency/idempotency.util.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
@@ -33,17 +33,17 @@ export class TransferService {
     idempotencyKey: string;
     requestHash?: string;
     dto: TransferCreateDto;
-  }): Promise<IdempotentExecutionResult<TransferResponseDto>> {
+  }): Promise<IdempotentExecutionResultInterface<TransferResponseDto>> {
     const { dto } = params;
     const fromSpec = {
       userId: dto.fromUserId,
       currency: dto.currency,
-      accountType: UserAccountType.AVAILABLE,
+      accountType: UserAccountTypeEnum.AVAILABLE,
     };
     const toSpec = {
       userId: dto.toUserId,
       currency: dto.currency,
-      accountType: UserAccountType.AVAILABLE,
+      accountType: UserAccountTypeEnum.AVAILABLE,
     };
 
     await this._walletService.ensureUserScaffold({
@@ -121,8 +121,8 @@ export class TransferService {
         }
 
         await this._ledgerService.postTransaction(tx, {
-          type: LedgerTxType.TRANSFER,
-          referenceType: LedgerRefType.TRANSFER,
+          type: LedgerTxTypeEnum.TRANSFER,
+          referenceType: LedgerRefTypeEnum.TRANSFER,
           referenceId: transferId,
           description: `Internal P2P transfer from ${dto.fromUserId} to ${dto.toUserId}`,
           metadata: {
@@ -133,12 +133,12 @@ export class TransferService {
           postings: [
             {
               account: fromAccount,
-              direction: LedgerDirection.DEBIT,
+              direction: LedgerDirectionEnum.DEBIT,
               amount: amountMinor,
             },
             {
               account: toAccount,
-              direction: LedgerDirection.CREDIT,
+              direction: LedgerDirectionEnum.CREDIT,
               amount: amountMinor,
             },
           ],

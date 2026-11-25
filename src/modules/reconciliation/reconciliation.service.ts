@@ -1,16 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, isNull, sql } from 'drizzle-orm';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
 import {
-  Currency,
-  ReconciliationAdjacentMatchType,
-  ReconciliationMismatchType,
-} from '../../common/enums/domain.enums.js';
+  ReconciliationAdjacentMatchTypeEnum,
+  ReconciliationMismatchTypeEnum,
+} from '../../common/enums/reconciliation.enums.js';
 import { formatMinorToApi } from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import type { DbTransaction } from '../../database/database.types.js';
-import { deposits } from '../../database/schema/index.js';
+import { deposits } from '../../database/schema/operations.schema.js';
 import { PspClient } from '../providers/psp.client.js';
 import type {
   ReconciliationAdjacentDayMatchDto,
@@ -21,12 +21,12 @@ import {
   assertValidCalendarDate,
   formatSignedIrtMinor,
 } from './reconciliation-date.util.js';
-import type { ReconciliationLocalDeposit } from './reconciliation.types.js';
+import type { ReconciliationLocalDepositInterface } from './reconciliation.interface.js';
 import {
   normalizeSettlementReference,
   parseSettlementCsv,
 } from './settlement-csv.parser.js';
-import type { CsvDepositRecord } from './settlement-csv.types.js';
+import type { CsvDepositRecordInterface } from './settlement-csv.interface.js';
 
 @Injectable()
 export class ReconciliationService {
@@ -121,7 +121,7 @@ export class ReconciliationService {
   private async _findSettlementCandidates(
     tx: DbTransaction,
     dateStr: string,
-  ): Promise<ReconciliationLocalDeposit[]> {
+  ): Promise<ReconciliationLocalDepositInterface[]> {
     const tz = this._configService.get('RECONCILIATION_TZ', { infer: true });
     const start = sql`(${dateStr}::date::timestamp AT TIME ZONE ${tz})`;
     const end = sql`((${dateStr}::date + 1)::timestamp AT TIME ZONE ${tz})`;
@@ -144,9 +144,9 @@ export class ReconciliationService {
   }
 
   private _groupDepositsByNormalizedRef(
-    rows: ReconciliationLocalDeposit[],
-  ): Map<string, ReconciliationLocalDeposit[]> {
-    const map = new Map<string, ReconciliationLocalDeposit[]>();
+    rows: ReconciliationLocalDepositInterface[],
+  ): Map<string, ReconciliationLocalDepositInterface[]> {
+    const map = new Map<string, ReconciliationLocalDepositInterface[]>();
     for (const row of rows) {
       if (!row.pspRefId) {
         continue;
@@ -163,10 +163,10 @@ export class ReconciliationService {
   }
 
   private _consumeMatchingCandidate(
-    candidates: ReconciliationLocalDeposit[] | undefined,
+    candidates: ReconciliationLocalDepositInterface[] | undefined,
     expectedAmountIrt: bigint,
     localForDateIds: ReadonlySet<string>,
-  ): ReconciliationLocalDeposit | undefined {
+  ): ReconciliationLocalDepositInterface | undefined {
     if (!candidates || candidates.length === 0) {
       return undefined;
     }
@@ -197,8 +197,8 @@ export class ReconciliationService {
   }
 
   private _reconcileCsvRow(
-    csvRow: CsvDepositRecord,
-    localByRef: Map<string, ReconciliationLocalDeposit[]>,
+    csvRow: CsvDepositRecordInterface,
+    localByRef: Map<string, ReconciliationLocalDepositInterface[]>,
     consumedLocalIds: Set<string>,
     localForDateIds: ReadonlySet<string>,
   ): {
@@ -220,11 +220,13 @@ export class ReconciliationService {
       const localIrt = match ? BigInt(match.verifiedAmount ?? '0') : null;
       return {
         mismatch: {
-          type: ReconciliationMismatchType.AMOUNT_MISMATCH,
+          type: ReconciliationMismatchTypeEnum.AMOUNT_MISMATCH,
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount:
-            localIrt !== null ? formatMinorToApi(localIrt, Currency.IRT) : null,
+            localIrt !== null
+              ? formatMinorToApi(localIrt, CurrencyEnum.IRT)
+              : null,
           depositId: match?.id ?? null,
           details: 'PSP settlement CSV deposit row has non-positive IRR amount',
         },
@@ -234,7 +236,7 @@ export class ReconciliationService {
     if (!match) {
       return {
         mismatch: {
-          type: ReconciliationMismatchType.MISSING_IN_LOCAL,
+          type: ReconciliationMismatchTypeEnum.MISSING_IN_LOCAL,
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount: null,
@@ -251,10 +253,10 @@ export class ReconciliationService {
     if (csvRow.hasIrrRemainder || csvRow.amountIrt !== localIrt) {
       return {
         mismatch: {
-          type: ReconciliationMismatchType.AMOUNT_MISMATCH,
+          type: ReconciliationMismatchTypeEnum.AMOUNT_MISMATCH,
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
-          localAmount: formatMinorToApi(localIrt, Currency.IRT),
+          localAmount: formatMinorToApi(localIrt, CurrencyEnum.IRT),
           depositId: match.id,
           details: csvRow.hasIrrRemainder
             ? 'PSP settlement CSV IRR amount is not an exact multiple of 10'
@@ -264,11 +266,11 @@ export class ReconciliationService {
     }
 
     if (!localForDateIds.has(match.id)) {
-      const formattedAmount = formatMinorToApi(localIrt, Currency.IRT);
+      const formattedAmount = formatMinorToApi(localIrt, CurrencyEnum.IRT);
       return {
         matchedDepositId: match.id,
         adjacentMatch: {
-          type: ReconciliationAdjacentMatchType.MATCHED_ADJACENT_DAY,
+          type: ReconciliationAdjacentMatchTypeEnum.MATCHED_ADJACENT_DAY,
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount: formattedAmount,
@@ -284,7 +286,7 @@ export class ReconciliationService {
   }
 
   private _checkMissingInCsv(
-    local: ReconciliationLocalDeposit,
+    local: ReconciliationLocalDepositInterface,
     consumedLocalIds: Set<string>,
   ): ReconciliationMismatchDto | undefined {
     if (consumedLocalIds.has(local.id)) {
@@ -297,10 +299,10 @@ export class ReconciliationService {
     const localIrt =
       local.verifiedAmount !== null ? BigInt(local.verifiedAmount) : 0n;
     return {
-      type: ReconciliationMismatchType.MISSING_IN_CSV,
+      type: ReconciliationMismatchTypeEnum.MISSING_IN_CSV,
       reference: normRef || local.id,
       csvAmount: null,
-      localAmount: formatMinorToApi(localIrt, Currency.IRT),
+      localAmount: formatMinorToApi(localIrt, CurrencyEnum.IRT),
       depositId: local.id,
       details:
         'Local SUCCEEDED deposit on target date not found in PSP settlement CSV',

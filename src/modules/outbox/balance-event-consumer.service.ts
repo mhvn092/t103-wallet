@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { assertValidUuid } from '../../common/utils/uuid-validation.util.js';
 import { DatabaseService } from '../../database/database.service.js';
-import { processedEvents } from '../../database/schema/index.js';
+import { processedEvents } from '../../database/schema/operations.schema.js';
 
 @Injectable()
 export class BalanceEventConsumerService {

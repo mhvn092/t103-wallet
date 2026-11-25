@@ -1,178 +1,237 @@
-import { z } from 'zod';
+import { plainToInstance } from 'class-transformer';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsTimeZone,
+  IsUrl,
+  Matches,
+  Max,
+  Min,
+  MinLength,
+  validateSync,
+} from 'class-validator';
 import { emptyToUndefined } from '../common/utils/string-normalizer.util.js';
 
-const httpUrlSchema = z.url().refine((value) => /^https?:\/\//i.test(value), {
-  message: 'URL must use http:// or https:// scheme',
-});
+class EnvironmentDto {
+  @IsIn(['development', 'test', 'production'])
+  NODE_ENV: 'development' | 'test' | 'production' = 'development';
 
-export const envSchema = z.object({
-  NODE_ENV: z
-    .enum(['development', 'test', 'production'])
-    .default('development'),
-  APP_ENV: z.enum(['local', 'dev', 'stage', 'production']).default('local'),
-  SWAGGER_ENABLED: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((v) => v === 'true'),
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  APP_PUBLIC_URL: httpUrlSchema.default('http://localhost:3000'),
-  DATABASE_URI: z
-    .string()
-    .min(1)
-    .regex(
-      /^postgres(?:ql)?:\/\//i,
-      'DATABASE_URI must use postgres:// or postgresql:// scheme',
-    ),
-  MIGRATION_DATABASE_URI: z.preprocess(
-    emptyToUndefined,
-    z
-      .string()
-      .min(1)
-      .regex(
-        /^postgres(?:ql)?:\/\//i,
-        'MIGRATION_DATABASE_URI must use postgres:// or postgresql:// scheme',
-      )
-      .optional(),
-  ),
-  POSTGRES_APP_USER: z.preprocess(
-    emptyToUndefined,
-    z
-      .string()
-      .regex(
-        /^[a-z_][a-z0-9_]{0,62}$/,
-        'POSTGRES_APP_USER must be a valid PostgreSQL identifier',
-      )
-      .optional(),
-  ),
-  POSTGRES_APP_PASSWORD: z.preprocess(
-    emptyToUndefined,
-    z.string().min(1).optional(),
-  ),
-  RABBITMQ_URI: z
-    .string()
-    .min(1)
-    .regex(/^amqps?:\/\//i, 'RABBITMQ_URI must use amqp:// or amqps:// scheme'),
-  PSP_BASE_URL: httpUrlSchema.default('http://localhost:8080'),
-  PAYOUT_BASE_URL: httpUrlSchema.default('http://localhost:8080'),
-  WEBHOOK_SECRET: z.string().min(1),
-  INTERNAL_API_KEY: z.preprocess(
-    emptyToUndefined,
-    z.string().min(1).optional(),
-  ),
-  WALLET_GATEWAY_KEY: z.preprocess(
-    emptyToUndefined,
-    z.string().min(32).optional(),
-  ),
-  INTERNAL_ALLOWED_IPS: z.preprocess(
-    emptyToUndefined,
-    z.string().min(1).optional(),
-  ),
-  ALLOW_UNAUTHENTICATED_INTERNAL_OPS: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((v) => v === 'true'),
-  READINESS_DB_TIMEOUT_MS: z.coerce
-    .number()
-    .int()
-    .min(100)
-    .max(10000)
-    .default(2000),
-  WD_MANUAL_REVIEW_SLA_MS: z.coerce
-    .number()
-    .int()
-    .min(1000)
-    .max(86_400_000)
-    .default(1_800_000),
-  MIN_WITHDRAWAL_IRT: z
-    .string()
-    .regex(/^[1-9]\d*$/)
-    .default('100000'),
-  MIN_WITHDRAWAL_USDT: z
-    .string()
-    .regex(/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/)
-    .default('10'),
-  USDT_WITHDRAWAL_FEE: z
-    .string()
-    .regex(/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/)
-    .default('1'),
-  DAILY_LIMIT_IRT: z
-    .string()
-    .regex(/^[1-9]\d*$/)
-    .default('200000000'),
-  USDT_IRT_RATE: z
-    .string()
-    .regex(/^[1-9]\d*$/)
-    .default('60000'),
-  DEPOSIT_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
-  DEPOSIT_EXPIRY_GRACE_MS: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(86_400_000)
-    .default(900_000),
-  RECONCILIATION_TZ: z
-    .string()
-    .min(1)
-    .default('UTC')
-    .refine((tz) => {
-      try {
-        new Intl.DateTimeFormat(undefined, { timeZone: tz });
-        return true;
-      } catch {
-        return false;
-      }
-    }, 'RECONCILIATION_TZ must be a valid IANA time zone'),
-  TRUST_PROXY: z.preprocess(
-    emptyToUndefined,
-    z
-      .string()
-      .regex(/^(?:true|false|loopback|\d+)$/i, 'Invalid TRUST_PROXY value')
-      .optional(),
-  ),
-  RETENTION_CLEANUP_INTERVAL_MS: z.coerce
-    .number()
-    .int()
-    .min(1000)
-    .max(86_400_000)
-    .default(300_000),
-  DRIFT_AUDIT_INTERVAL_MS: z.coerce
-    .number()
-    .int()
-    .min(1000)
-    .max(86_400_000)
-    .default(60_000),
-  PROVIDER_HTTP_TIMEOUT_MS: z.coerce
-    .number()
-    .int()
-    .min(500)
-    .max(60000)
-    .default(10000),
-  WORKER_POLL_INTERVAL_MS: z.coerce
-    .number()
-    .int()
-    .min(50)
-    .max(60000)
-    .default(1000),
-  WORKERS_ENABLED: z
-    .enum(['true', 'false'])
-    .default('true')
-    .transform((v) => v === 'true'),
-});
+  @IsIn(['local', 'dev', 'stage', 'production'])
+  APP_ENV: 'local' | 'dev' | 'stage' | 'production' = 'local';
 
-export type EnvConfig = z.infer<typeof envSchema>;
+  @IsIn(['true', 'false'])
+  SWAGGER_ENABLED: 'true' | 'false' = 'false';
+
+  @IsInt()
+  @Min(1)
+  @Max(65535)
+  PORT: number = 3000;
+
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
+  APP_PUBLIC_URL: string = 'http://localhost:3000';
+
+  @IsString()
+  @Matches(/^postgres(?:ql)?:\/\//i)
+  DATABASE_URI!: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^postgres(?:ql)?:\/\//i)
+  MIGRATION_DATABASE_URI?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[a-z_][a-z0-9_]{0,62}$/)
+  POSTGRES_APP_USER?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  POSTGRES_APP_PASSWORD?: string;
+
+  @IsString()
+  @Matches(/^amqps?:\/\//i)
+  RABBITMQ_URI!: string;
+
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
+  PSP_BASE_URL: string = 'http://localhost:8080';
+
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
+  PAYOUT_BASE_URL: string = 'http://localhost:8080';
+
+  @IsString()
+  @MinLength(1)
+  WEBHOOK_SECRET!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  INTERNAL_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  WALLET_GATEWAY_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  INTERNAL_ALLOWED_IPS?: string;
+
+  @IsIn(['true', 'false'])
+  ALLOW_UNAUTHENTICATED_INTERNAL_OPS: 'true' | 'false' = 'false';
+
+  @IsInt()
+  @Min(100)
+  @Max(10000)
+  READINESS_DB_TIMEOUT_MS: number = 2000;
+
+  @IsInt()
+  @Min(1000)
+  @Max(86400000)
+  WD_MANUAL_REVIEW_SLA_MS: number = 1800000;
+
+  @IsString()
+  @Matches(/^[1-9]\d*$/)
+  MIN_WITHDRAWAL_IRT: string = '100000';
+
+  @IsString()
+  @Matches(/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/)
+  MIN_WITHDRAWAL_USDT: string = '10';
+
+  @IsString()
+  @Matches(/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/)
+  USDT_WITHDRAWAL_FEE: string = '1';
+
+  @IsString()
+  @Matches(/^[1-9]\d*$/)
+  DAILY_LIMIT_IRT: string = '200000000';
+
+  @IsString()
+  @Matches(/^[1-9]\d*$/)
+  USDT_IRT_RATE: string = '60000';
+
+  @IsInt()
+  @Min(1)
+  DEPOSIT_TTL_SECONDS: number = 1800;
+
+  @IsInt()
+  @Min(0)
+  @Max(86400000)
+  DEPOSIT_EXPIRY_GRACE_MS: number = 900000;
+
+  @IsString()
+  @IsTimeZone()
+  RECONCILIATION_TZ: string = 'UTC';
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^(?:true|false|loopback|\d+)$/i)
+  TRUST_PROXY?: string;
+
+  @IsInt()
+  @Min(1000)
+  @Max(86400000)
+  RETENTION_CLEANUP_INTERVAL_MS: number = 300000;
+
+  @IsInt()
+  @Min(1000)
+  @Max(86400000)
+  DRIFT_AUDIT_INTERVAL_MS: number = 60000;
+
+  @IsInt()
+  @Min(500)
+  @Max(60000)
+  PROVIDER_HTTP_TIMEOUT_MS: number = 10000;
+
+  @IsInt()
+  @Min(50)
+  @Max(60000)
+  WORKER_POLL_INTERVAL_MS: number = 1000;
+
+  @IsIn(['true', 'false'])
+  WORKERS_ENABLED: 'true' | 'false' = 'true';
+}
+
+export type EnvConfig = Omit<
+  EnvironmentDto,
+  'SWAGGER_ENABLED' | 'ALLOW_UNAUTHENTICATED_INTERNAL_OPS' | 'WORKERS_ENABLED'
+> & {
+  SWAGGER_ENABLED: boolean;
+  ALLOW_UNAUTHENTICATED_INTERNAL_OPS: boolean;
+  WORKERS_ENABLED: boolean;
+};
 
 export function validateEnv(config: Record<string, unknown>): EnvConfig {
-  const parsed = envSchema.safeParse({
+  const values: Record<string, unknown> = {
     ...config,
     APP_ENV:
       config.APP_ENV ??
       (config.NODE_ENV === 'production' ? 'production' : 'local'),
+  };
+  for (const key of [
+    'PORT',
+    'READINESS_DB_TIMEOUT_MS',
+    'WD_MANUAL_REVIEW_SLA_MS',
+    'DEPOSIT_TTL_SECONDS',
+    'DEPOSIT_EXPIRY_GRACE_MS',
+    'RETENTION_CLEANUP_INTERVAL_MS',
+    'DRIFT_AUDIT_INTERVAL_MS',
+    'PROVIDER_HTTP_TIMEOUT_MS',
+    'WORKER_POLL_INTERVAL_MS',
+  ]) {
+    if (values[key] !== undefined) {
+      values[key] = Number(values[key]);
+    }
+  }
+  for (const key of [
+    'MIGRATION_DATABASE_URI',
+    'POSTGRES_APP_USER',
+    'POSTGRES_APP_PASSWORD',
+    'INTERNAL_API_KEY',
+    'WALLET_GATEWAY_KEY',
+    'INTERNAL_ALLOWED_IPS',
+    'TRUST_PROXY',
+  ]) {
+    values[key] = emptyToUndefined(values[key]);
+  }
+  const dto = plainToInstance(EnvironmentDto, values, {
+    exposeUnsetFields: false,
   });
-  if (!parsed.success) {
-    const details = parsed.error.issues
-      .map((issue) => `${issue.path.join('.') || 'env'}: ${issue.message}`)
+  const errors = validateSync(dto, { whitelist: true });
+  if (errors.length > 0) {
+    const details = errors
+      .flatMap((error) =>
+        Object.values(error.constraints ?? {}).map(
+          (message) => `${error.property}: ${message}`,
+        ),
+      )
       .join('; ');
     throw new Error(`Environment validation failed: ${details}`);
   }
-  return parsed.data;
+  const validated = Object.fromEntries(Object.entries(dto)) as Omit<
+    EnvConfig,
+    'SWAGGER_ENABLED' | 'ALLOW_UNAUTHENTICATED_INTERNAL_OPS' | 'WORKERS_ENABLED'
+  >;
+  return {
+    ...validated,
+    SWAGGER_ENABLED: dto.SWAGGER_ENABLED === 'true',
+    ALLOW_UNAUTHENTICATED_INTERNAL_OPS:
+      dto.ALLOW_UNAUTHENTICATED_INTERNAL_OPS === 'true',
+    WORKERS_ENABLED: dto.WORKERS_ENABLED === 'true',
+  };
 }

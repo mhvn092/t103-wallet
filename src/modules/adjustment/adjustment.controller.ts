@@ -1,18 +1,10 @@
-import {
-  Body,
-  Controller,
-  Headers,
-  Post,
-  Res,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Headers, Post, UseGuards } from '@nestjs/common';
 import {
   ApiCreatedResponse,
   ApiHeader,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import {
   ApiErrorResponses,
   AUTHENTICATED_WRITE_ERROR_STATUSES,
@@ -53,7 +45,6 @@ export class AdjustmentController {
     @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: AdjustmentCreateDto,
     @Headers('x-operator-id') rawOperatorId: string | undefined,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<AdjustmentResponseDto> {
     const operatorId = rawOperatorId?.trim() || 'system-ops';
     const result = await this._adjustmentService.createAdjustment({
@@ -62,7 +53,6 @@ export class AdjustmentController {
       dto,
       operatorId,
     });
-    res.status(result.statusCode);
     return result.body;
   }
 }

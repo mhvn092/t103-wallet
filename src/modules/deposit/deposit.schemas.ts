@@ -1,6 +1,13 @@
-import { z } from 'zod';
+import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
-export const pspCallbackPayloadSchema = z.object({
-  token: z.string().min(1).nullish(),
-  orderId: z.string().min(1).nullish(),
-});
+export class PspCallbackPayloadDto {
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  token?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  orderId?: string | null;
+}

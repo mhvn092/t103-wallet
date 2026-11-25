@@ -10,8 +10,11 @@ import {
   ValidatorConstraint,
   type ValidatorConstraintInterface,
 } from 'class-validator';
-import { WalletAccountFilter } from '../../../common/enums/domain.enums.js';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
+import { WalletAccountFilterEnum } from '../../../common/enums/account.enums.js';
+import {
+  CURRENCIES,
+  type CurrencyEnum,
+} from '../../../common/enums/currency.enum.js';
 import { emptyToUndefined } from '../../../common/utils/string-normalizer.util.js';
 import {
   WALLET_ACCOUNT_FILTERS,
@@ -54,17 +57,19 @@ export class WalletLedgerQueryDto {
 
   @ApiPropertyOptional({
     enum: WALLET_ACCOUNT_FILTERS,
-    default: WalletAccountFilter.ALL,
+    default: WalletAccountFilterEnum.ALL,
   })
-  @Transform(({ value }) => emptyToUndefined(value) ?? WalletAccountFilter.ALL)
+  @Transform(
+    ({ value }) => emptyToUndefined(value) ?? WalletAccountFilterEnum.ALL,
+  )
   @IsIn(WALLET_ACCOUNT_FILTERS, {
     message: 'accountType must be AVAILABLE, LOCKED, RECEIVABLE, or ALL',
   })
-  accountType: WalletAccountFilter = WalletAccountFilter.ALL;
+  accountType: WalletAccountFilterEnum = WalletAccountFilterEnum.ALL;
 
   @ApiPropertyOptional({ enum: CURRENCIES })
   @Transform(({ value }) => emptyToUndefined(value))
   @ValidateIf((o: WalletLedgerQueryDto) => o.currency !== undefined)
   @IsIn(CURRENCIES, { message: 'currency must be IRT or USDT' })
-  currency?: Currency;
+  currency?: CurrencyEnum;
 }

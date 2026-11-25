@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { HttpStatus } from '@nestjs/common';
+import { CurrencyEnum } from '../enums/currency.enum.js';
 import { DomainException } from '../errors/domain.exception.js';
 import { ErrorCode } from '../errors/error-codes.js';
-import type { Currency } from './money.util.js';
 
 const IR_IBAN_REGEX = /^IR\d{24}$/;
 const TRC20_REGEX = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
@@ -69,10 +69,10 @@ export function isValidTrc20Address(address: string): boolean {
 
 export function assertValidDestination(
   destination: string,
-  currency: Currency,
+  currency: CurrencyEnum,
 ): string {
   const trimmed = destination.trim();
-  if (currency === 'IRT') {
+  if (currency === CurrencyEnum.IRT) {
     const upper = trimmed.toUpperCase();
     if (!isValidIranianIban(upper)) {
       throw new DomainException(

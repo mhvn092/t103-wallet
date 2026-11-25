@@ -1,4 +1,4 @@
-export interface CsvDepositRecord {
+export interface CsvDepositRecordInterface {
   rowNumber: string;
   persianDate: string;
   rawReference: string;
@@ -9,8 +9,8 @@ export interface CsvDepositRecord {
   description: string;
 }
 
-export interface ParsedSettlementCsv {
-  deposits: CsvDepositRecord[];
+export interface ParsedSettlementCsvInterface {
+  deposits: CsvDepositRecordInterface[];
   ignoredRowCount: number;
   duplicateCount: number;
 }

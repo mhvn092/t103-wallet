@@ -1,11 +1,10 @@
-import { Body, Controller, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import {
   ApiCreatedResponse,
   ApiHeader,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import {
   ApiErrorResponses,
   AUTHENTICATED_WRITE_ERROR_STATUSES,
@@ -46,14 +45,12 @@ export class TransferController {
     @RequireIdempotencyKey() idempotencyKey: string,
     @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: TransferCreateDto,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<TransferResponseDto> {
     const result = await this._transferService.createTransfer({
       idempotencyKey,
       requestHash,
       dto,
     });
-    res.status(result.statusCode);
     return result.body;
   }
 }

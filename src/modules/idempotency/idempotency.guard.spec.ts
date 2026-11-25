@@ -8,7 +8,7 @@ import {
   type RequestWithIdempotency,
 } from './idempotency.decorator.js';
 import { IdempotencyPreCheckGuard } from './idempotency.guard.js';
-import type { IdempotencyRouteConfig } from './idempotency.types.js';
+import type { IdempotencyRouteConfigInterface } from './idempotency.interface.js';
 
 function makeContext(opts: {
   key?: string;
@@ -34,7 +34,7 @@ function makeContext(opts: {
 }
 
 function makeGuard(
-  routeConfig: IdempotencyRouteConfig | undefined,
+  routeConfig: IdempotencyRouteConfigInterface | undefined,
   existingHash?: string,
 ): IdempotencyPreCheckGuard {
   const reflector = {

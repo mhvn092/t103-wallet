@@ -1,11 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
-interface RequestContextStore {
+interface RequestContextStoreInterface {
   requestId: string;
 }
 
-const requestContextStorage = new AsyncLocalStorage<RequestContextStore>();
+const requestContextStorage =
+  new AsyncLocalStorage<RequestContextStoreInterface>();
 const SAFE_REQUEST_ID_REGEX = /^[A-Za-z0-9._-]{1,128}$/;
 
 export function resolveCorrelationId(rawHeader?: string): string {

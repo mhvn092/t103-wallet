@@ -4,7 +4,10 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import type { EnvConfig } from '../config/env.validation.js';
 import type { AppDatabase, DbTransaction } from './database.types.js';
-import * as schema from './schema/index.js';
+import * as accountsSchema from './schema/accounts.schema.js';
+import * as ledgerSchema from './schema/ledger.schema.js';
+import * as operationsSchema from './schema/operations.schema.js';
+import * as enumSchema from './schema/pg-enums.schema.js';
 
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
@@ -26,7 +29,14 @@ export class DatabaseService implements OnModuleDestroy {
         'PostgreSQL removed an idle pool client after a connection error',
       );
     });
-    this.db = drizzle(this.pool, { schema });
+    this.db = drizzle(this.pool, {
+      schema: {
+        ...accountsSchema,
+        ...ledgerSchema,
+        ...operationsSchema,
+        ...enumSchema,
+      },
+    });
   }
 
   async runInTransaction<T>(fn: (tx: DbTransaction) => Promise<T>): Promise<T> {

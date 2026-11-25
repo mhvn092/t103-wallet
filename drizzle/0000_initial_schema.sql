@@ -39,7 +39,7 @@ CREATE TYPE "outbox_status" AS ENUM ('PENDING', 'PUBLISHED');
 
 -- 2. Core tables
 CREATE TABLE "accounts" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"owner_type" "account_owner_type" NOT NULL,
 	"owner_id" text NOT NULL,
 	"currency" "currency" NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE "user_restrictions" (
 );
 --> statement-breakpoint
 CREATE TABLE "ledger_transactions" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"tx_xid" xid8 NOT NULL DEFAULT pg_current_xact_id(),
 	"type" "ledger_tx_type" NOT NULL,
 	"reference_type" "ledger_ref_type" NOT NULL,
@@ -101,7 +101,7 @@ CREATE TABLE "ledger_items" (
 );
 --> statement-breakpoint
 CREATE TABLE "adjustments" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"user_id" text NOT NULL,
 	"currency" "currency" NOT NULL,
 	"amount" numeric(38, 0) NOT NULL,
@@ -112,7 +112,7 @@ CREATE TABLE "adjustments" (
 );
 --> statement-breakpoint
 CREATE TABLE "deposits" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"user_id" text NOT NULL,
 	"requested_amount" numeric(38, 0) NOT NULL,
 	"verified_amount" numeric(38, 0),
@@ -135,7 +135,7 @@ CREATE TABLE "deposits" (
 );
 --> statement-breakpoint
 CREATE TABLE "financial_discrepancies" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"reference_type" "discrepancy_ref_type" NOT NULL,
 	"reference_id" uuid NOT NULL,
 	"user_id" text NOT NULL,
@@ -162,7 +162,7 @@ CREATE TABLE "idempotency_keys" (
 );
 --> statement-breakpoint
 CREATE TABLE "outbox_events" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"event_type" "outbox_event_type" NOT NULL,
 	"payload" jsonb NOT NULL,
 	"status" "outbox_status" DEFAULT 'PENDING' NOT NULL,
@@ -182,7 +182,7 @@ CREATE TABLE "processed_events" (
 );
 --> statement-breakpoint
 CREATE TABLE "transfers" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"from_user_id" text NOT NULL,
 	"to_user_id" text NOT NULL,
 	"currency" "currency" NOT NULL,
@@ -192,7 +192,7 @@ CREATE TABLE "transfers" (
 );
 --> statement-breakpoint
 CREATE TABLE "withdrawals" (
-	"id" uuid PRIMARY KEY NOT NULL,
+	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"user_id" text NOT NULL,
 	"currency" "currency" NOT NULL,
 	"amount" numeric(38, 0) NOT NULL,

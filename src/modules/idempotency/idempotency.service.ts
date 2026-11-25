@@ -1,20 +1,18 @@
+import type { ExistingRecordOutcome } from './idempotency.types.js';
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { and, eq, gt, lte, or, sql } from 'drizzle-orm';
-import { IdempotencyStatus } from '../../common/enums/domain.enums.js';
+import { IdempotencyStatusEnum } from '../../common/enums/idempotency.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import { sha256CanonicalJson } from '../../common/utils/canonical-json.util.js';
 import { DatabaseService } from '../../database/database.service.js';
 import type { DbTransaction } from '../../database/database.types.js';
-import { idempotencyKeys } from '../../database/schema/index.js';
+import { idempotencyKeys } from '../../database/schema/operations.schema.js';
 import {
   IDEMPOTENCY_DEFAULT_LEASE_MS,
   IDEMPOTENCY_DEFAULT_TTL_MS,
 } from './idempotency.constants.js';
-import type {
-  ExistingRecordOutcome,
-  IdempotentExecutionResult,
-} from './idempotency.types.js';
+import type { IdempotentExecutionResultInterface } from './idempotency.interface.js';
 
 import { isCacheableRequestError } from './idempotency.util.js';
 
@@ -33,7 +31,7 @@ export class IdempotencyService {
     requestHashOverride?: string;
     statusCode?: number;
     handler: (tx: DbTransaction) => Promise<T>;
-  }): Promise<IdempotentExecutionResult<T>> {
+  }): Promise<IdempotentExecutionResultInterface<T>> {
     const requestHash =
       params.requestHashOverride ?? sha256CanonicalJson(params.requestBody);
     const expiresAt = new Date(Date.now() + IDEMPOTENCY_DEFAULT_TTL_MS);
@@ -46,7 +44,7 @@ export class IdempotencyService {
           scope: params.scope,
           key: params.key,
           requestHash,
-          status: IdempotencyStatus.IN_PROGRESS,
+          status: IdempotencyStatusEnum.IN_PROGRESS,
           expiresAt,
         })
         .onConflictDoNothing({
@@ -91,7 +89,7 @@ export class IdempotencyService {
       await tx
         .update(idempotencyKeys)
         .set({
-          status: IdempotencyStatus.COMPLETED,
+          status: IdempotencyStatusEnum.COMPLETED,
           responseStatus: response.statusCode,
           responseBody: response.body,
         })
@@ -142,7 +140,7 @@ export class IdempotencyService {
           scope: params.scope,
           key: params.key,
           requestHash,
-          status: IdempotencyStatus.IN_PROGRESS,
+          status: IdempotencyStatusEnum.IN_PROGRESS,
           lockedUntil: lockedUntilExpr,
           leaseVersion: 1n,
           expiresAt,
@@ -178,7 +176,7 @@ export class IdempotencyService {
           and(
             eq(idempotencyKeys.scope, params.scope),
             eq(idempotencyKeys.key, params.key),
-            eq(idempotencyKeys.status, IdempotencyStatus.IN_PROGRESS),
+            eq(idempotencyKeys.status, IdempotencyStatusEnum.IN_PROGRESS),
             or(
               sql`${idempotencyKeys.lockedUntil} IS NULL`,
               lte(idempotencyKeys.lockedUntil, sql`NOW()`),
@@ -212,7 +210,7 @@ export class IdempotencyService {
     const updated = await db
       .update(idempotencyKeys)
       .set({
-        status: IdempotencyStatus.COMPLETED,
+        status: IdempotencyStatusEnum.COMPLETED,
         responseStatus: params.statusCode,
         responseBody: params.body,
         lockedUntil: null,
@@ -221,7 +219,7 @@ export class IdempotencyService {
         and(
           eq(idempotencyKeys.scope, params.scope),
           eq(idempotencyKeys.key, params.key),
-          eq(idempotencyKeys.status, IdempotencyStatus.IN_PROGRESS),
+          eq(idempotencyKeys.status, IdempotencyStatusEnum.IN_PROGRESS),
           eq(idempotencyKeys.leaseVersion, params.leaseVersion),
           gt(idempotencyKeys.lockedUntil, sql`NOW()`),
         ),
@@ -248,7 +246,7 @@ export class IdempotencyService {
         and(
           eq(idempotencyKeys.scope, scope),
           eq(idempotencyKeys.key, key),
-          eq(idempotencyKeys.status, IdempotencyStatus.IN_PROGRESS),
+          eq(idempotencyKeys.status, IdempotencyStatusEnum.IN_PROGRESS),
           eq(idempotencyKeys.leaseVersion, leaseVersion),
         ),
       );
@@ -293,7 +291,7 @@ export class IdempotencyService {
     }
 
     if (
-      existing.status === IdempotencyStatus.COMPLETED &&
+      existing.status === IdempotencyStatusEnum.COMPLETED &&
       existing.responseBody !== null
     ) {
       return {

@@ -1,4 +1,5 @@
-import { Currency, PayoutCurrency } from '../../common/enums/domain.enums.js';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
+import { PayoutCurrencyEnum } from '../../common/enums/provider.enums.js';
 import { isWebhookAmountValid } from './withdrawal.mapper.js';
 import type { WithdrawalEntity } from './withdrawal.types.js';
 
@@ -19,10 +20,11 @@ export function detectProviderPayloadMismatch(
 
   const currencyMismatch = Boolean(
     normCcy &&
-    ((expectedCurrency === Currency.IRT &&
-      normCcy !== PayoutCurrency.IRR &&
-      normCcy !== Currency.IRT) ||
-      (expectedCurrency === Currency.USDT && normCcy !== PayoutCurrency.USDT)),
+    ((expectedCurrency === CurrencyEnum.IRT &&
+      normCcy !== PayoutCurrencyEnum.IRR &&
+      normCcy !== CurrencyEnum.IRT) ||
+      (expectedCurrency === CurrencyEnum.USDT &&
+        normCcy !== PayoutCurrencyEnum.USDT)),
   );
 
   const amountMismatch =

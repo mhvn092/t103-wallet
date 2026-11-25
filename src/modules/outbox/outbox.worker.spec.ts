@@ -1,3 +1,4 @@
+import { SchedulerRegistry } from '@nestjs/schedule';
 import type { ConfigService } from '@nestjs/config';
 import { describe, expect, it, vi } from 'vitest';
 import type { EnvConfig } from '../../config/env.validation.js';
@@ -41,11 +42,13 @@ describe('OutboxWorker consumer auto-reconnect (F-05)', () => {
       consumer,
     );
 
+    Reflect.set(worker, '_schedulerRegistry', new SchedulerRegistry());
     worker.onModuleInit();
     await worker.tickForTest();
     await worker.tickForTest();
 
     expect(startConsumer).toHaveBeenCalledTimes(3);
     expect(publishPendingBatch).toHaveBeenCalledTimes(2);
+    await worker.onModuleDestroy();
   });
 });

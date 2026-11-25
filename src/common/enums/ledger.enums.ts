@@ -1,0 +1,23 @@
+export enum LedgerDirectionEnum {
+  DEBIT = 'DEBIT',
+  CREDIT = 'CREDIT',
+}
+
+export enum LedgerTxTypeEnum {
+  DEPOSIT = 'DEPOSIT',
+  WD_HOLD = 'WD_HOLD',
+  WD_SETTLE = 'WD_SETTLE',
+  WD_RELEASE = 'WD_RELEASE',
+  WD_RETURN = 'WD_RETURN',
+  WD_LATE_SUCCESS = 'WD_LATE_SUCCESS',
+  OPS_ADJ = 'OPS_ADJ',
+  RECEIVABLE_SETTLE = 'RECEIVABLE_SETTLE',
+  TRANSFER = 'TRANSFER',
+}
+
+export enum LedgerRefTypeEnum {
+  DEPOSIT = 'DEPOSIT',
+  WITHDRAWAL = 'WITHDRAWAL',
+  ADJUSTMENT = 'ADJUSTMENT',
+  TRANSFER = 'TRANSFER',
+}

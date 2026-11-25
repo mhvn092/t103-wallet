@@ -8,7 +8,7 @@ import { DatabaseService } from '../../database/database.service.js';
 const OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const PROCESSED_EVENTS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-interface RetentionPurgeSummary {
+interface RetentionPurgeSummaryInterface {
   idempotencyDeleted: number;
   outboxDeleted: number;
   processedDeleted: number;
@@ -27,7 +27,7 @@ export class RetentionWorker extends IntervalWorkerBase {
 
   async purgeExpiredOperationalRecords(
     batchSize = 1000,
-  ): Promise<RetentionPurgeSummary> {
+  ): Promise<RetentionPurgeSummaryInterface> {
     const safeLimit = Math.max(1, Math.min(batchSize, 10_000));
     const nowMs = Date.now();
     const outboxCutoffId = uuidV7LowerBoundForMs(nowMs - OUTBOX_RETENTION_MS);

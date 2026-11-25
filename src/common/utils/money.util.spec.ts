@@ -1,6 +1,6 @@
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { Currency } from '../enums/domain.enums.js';
+import { CurrencyEnum } from '../enums/currency.enum.js';
 import {
   MAX_AMOUNT_MINOR,
   USDT_MINOR_PER_UNIT,
@@ -11,40 +11,42 @@ import {
 
 describe('money utilities', () => {
   it('parses IRT positive integer strings and rejects floats/zero/negatives/overflow', () => {
-    expect(parseAmountToMinor('100000', Currency.IRT)).toBe(100_000n);
-    expect(parseAmountToMinor(MAX_AMOUNT_MINOR.toString(), Currency.IRT)).toBe(
-      MAX_AMOUNT_MINOR,
+    expect(parseAmountToMinor('100000', CurrencyEnum.IRT)).toBe(100_000n);
+    expect(
+      parseAmountToMinor(MAX_AMOUNT_MINOR.toString(), CurrencyEnum.IRT),
+    ).toBe(MAX_AMOUNT_MINOR);
+    expect(parseAmountToMinor('0', CurrencyEnum.IRT, { allowZero: true })).toBe(
+      0n,
     );
-    expect(parseAmountToMinor('0', Currency.IRT, { allowZero: true })).toBe(0n);
-    expect(() => parseAmountToMinor('0', Currency.IRT)).toThrow();
-    expect(() => parseAmountToMinor('100.5', Currency.IRT)).toThrow();
-    expect(() => parseAmountToMinor('-500', Currency.IRT)).toThrow();
-    expect(() => parseAmountToMinor('1e5', Currency.IRT)).toThrow();
+    expect(() => parseAmountToMinor('0', CurrencyEnum.IRT)).toThrow();
+    expect(() => parseAmountToMinor('100.5', CurrencyEnum.IRT)).toThrow();
+    expect(() => parseAmountToMinor('-500', CurrencyEnum.IRT)).toThrow();
+    expect(() => parseAmountToMinor('1e5', CurrencyEnum.IRT)).toThrow();
     expect(() =>
-      parseAmountToMinor((MAX_AMOUNT_MINOR + 1n).toString(), Currency.IRT),
+      parseAmountToMinor((MAX_AMOUNT_MINOR + 1n).toString(), CurrencyEnum.IRT),
     ).toThrow(/maximum allowed magnitude/);
     expect(() =>
-      parseAmountToMinor('1000000000.000001', Currency.USDT),
+      parseAmountToMinor('1000000000.000001', CurrencyEnum.USDT),
     ).toThrow(/maximum allowed magnitude/);
   });
 
   it('parses USDT up to 6 decimals into micro-USDT bigint without float precision loss', () => {
-    expect(parseAmountToMinor('10', Currency.USDT)).toBe(10_000_000n);
-    expect(parseAmountToMinor('0.1', Currency.USDT)).toBe(100_000n);
-    expect(parseAmountToMinor('0.000001', Currency.USDT)).toBe(1n);
-    expect(parseAmountToMinor('123456.789012', Currency.USDT)).toBe(
+    expect(parseAmountToMinor('10', CurrencyEnum.USDT)).toBe(10_000_000n);
+    expect(parseAmountToMinor('0.1', CurrencyEnum.USDT)).toBe(100_000n);
+    expect(parseAmountToMinor('0.000001', CurrencyEnum.USDT)).toBe(1n);
+    expect(parseAmountToMinor('123456.789012', CurrencyEnum.USDT)).toBe(
       123_456_789_012n,
     );
-    expect(() => parseAmountToMinor('1.1234567', Currency.USDT)).toThrow();
-    expect(() => parseAmountToMinor('0.000000', Currency.USDT)).toThrow();
+    expect(() => parseAmountToMinor('1.1234567', CurrencyEnum.USDT)).toThrow();
+    expect(() => parseAmountToMinor('0.000000', CurrencyEnum.USDT)).toThrow();
   });
 
   it('formats IRT and USDT minor units accurately', () => {
-    expect(formatMinorToApi(250_000n, Currency.IRT)).toBe('250000');
-    expect(formatMinorToApi(0n, Currency.USDT)).toBe('0');
-    expect(formatMinorToApi(50_000_000n, Currency.USDT)).toBe('50');
-    expect(formatMinorToApi(10_500_000n, Currency.USDT)).toBe('10.5');
-    expect(formatMinorToApi(1n, Currency.USDT)).toBe('0.000001');
+    expect(formatMinorToApi(250_000n, CurrencyEnum.IRT)).toBe('250000');
+    expect(formatMinorToApi(0n, CurrencyEnum.USDT)).toBe('0');
+    expect(formatMinorToApi(50_000_000n, CurrencyEnum.USDT)).toBe('50');
+    expect(formatMinorToApi(10_500_000n, CurrencyEnum.USDT)).toBe('10.5');
+    expect(formatMinorToApi(1n, CurrencyEnum.USDT)).toBe('0.000001');
   });
 
   it('computes ceiling integer USDT->IRT conversion', () => {
@@ -59,8 +61,8 @@ describe('money utilities', () => {
       fc.property(fc.bigInt({ min: 1n, max: 10n ** 15n }), (minor) => {
         expect(
           parseAmountToMinor(
-            formatMinorToApi(minor, Currency.IRT),
-            Currency.IRT,
+            formatMinorToApi(minor, CurrencyEnum.IRT),
+            CurrencyEnum.IRT,
           ),
         ).toBe(minor);
       }),
@@ -70,8 +72,8 @@ describe('money utilities', () => {
       fc.property(fc.bigInt({ min: 1n, max: 10n ** 15n }), (minor) => {
         expect(
           parseAmountToMinor(
-            formatMinorToApi(minor, Currency.USDT),
-            Currency.USDT,
+            formatMinorToApi(minor, CurrencyEnum.USDT),
+            CurrencyEnum.USDT,
           ),
         ).toBe(minor);
       }),

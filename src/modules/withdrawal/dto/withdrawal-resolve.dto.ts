@@ -7,15 +7,15 @@ import {
   MaxLength,
 } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator.js';
-import { WithdrawalOpsOutcome } from '../../../common/enums/domain.enums.js';
+import { WithdrawalOpsOutcomeEnum } from '../../../common/enums/withdrawal.enums.js';
 
 export class WithdrawalResolveDto {
   @ApiProperty({
-    enum: WithdrawalOpsOutcome,
-    example: WithdrawalOpsOutcome.SUCCEEDED,
+    enum: WithdrawalOpsOutcomeEnum,
+    example: WithdrawalOpsOutcomeEnum.SUCCEEDED,
   })
-  @IsEnum(WithdrawalOpsOutcome)
-  outcome!: WithdrawalOpsOutcome;
+  @IsEnum(WithdrawalOpsOutcomeEnum)
+  outcome!: WithdrawalOpsOutcomeEnum;
 
   @ApiProperty({
     description: 'Audit reason for manual review resolution',

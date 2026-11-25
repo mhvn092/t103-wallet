@@ -1,14 +1,12 @@
+import { PayoutStatusValueEnum } from '../../common/enums/provider.enums.js';
 import {
-  PayoutStatusValue,
-  WithdrawalFailureReason,
-  WithdrawalOpsOutcome,
-  WithdrawalStatus,
-} from '../../common/enums/domain.enums.js';
+  WithdrawalFailureReasonEnum,
+  WithdrawalOpsOutcomeEnum,
+  WithdrawalStatusEnum,
+} from '../../common/enums/withdrawal.enums.js';
 
-export { WithdrawalStatus };
-
-interface WithdrawalTransitionContext {
-  status: WithdrawalStatus;
+interface WithdrawalTransitionContextInterface {
+  status: WithdrawalStatusEnum;
   failureReason: string | null;
   terminalReturn: boolean;
   lateSuccessConflict: boolean;
@@ -17,9 +15,9 @@ interface WithdrawalTransitionContext {
 }
 
 type WithdrawalEvent =
-  | { kind: 'PROVIDER_STATUS'; status: PayoutStatusValue }
+  | { kind: 'PROVIDER_STATUS'; status: PayoutStatusValueEnum }
   | { kind: 'USER_CANCEL' }
-  | { kind: 'OPS_RESOLVE'; outcome: WithdrawalOpsOutcome };
+  | { kind: 'OPS_RESOLVE'; outcome: WithdrawalOpsOutcomeEnum };
 
 type WithdrawalAction =
   | { kind: 'NOOP' }
@@ -32,37 +30,37 @@ type WithdrawalAction =
   | { kind: 'LATE_SUCCESS_CLAWBACK' }
   | { kind: 'INVALID_TRANSITION'; reason: string };
 
-const INFLIGHT_STATUSES = new Set<WithdrawalStatus>([
-  WithdrawalStatus.DISPATCHING,
-  WithdrawalStatus.PROCESSING,
-  WithdrawalStatus.MANUAL_REVIEW,
+const INFLIGHT_STATUSES = new Set<WithdrawalStatusEnum>([
+  WithdrawalStatusEnum.DISPATCHING,
+  WithdrawalStatusEnum.PROCESSING,
+  WithdrawalStatusEnum.MANUAL_REVIEW,
 ]);
 
-export function toWithdrawalStatus(raw: string): WithdrawalStatus {
+export function toWithdrawalStatus(raw: string): WithdrawalStatusEnum {
   switch (raw) {
-    case WithdrawalStatus.PENDING_DISPATCH:
-    case WithdrawalStatus.DISPATCHING:
-    case WithdrawalStatus.PROCESSING:
-    case WithdrawalStatus.MANUAL_REVIEW:
-    case WithdrawalStatus.SUCCEEDED:
-    case WithdrawalStatus.FAILED:
+    case WithdrawalStatusEnum.PENDING_DISPATCH:
+    case WithdrawalStatusEnum.DISPATCHING:
+    case WithdrawalStatusEnum.PROCESSING:
+    case WithdrawalStatusEnum.MANUAL_REVIEW:
+    case WithdrawalStatusEnum.SUCCEEDED:
+    case WithdrawalStatusEnum.FAILED:
       return raw;
     default:
-      return WithdrawalStatus.MANUAL_REVIEW;
+      return WithdrawalStatusEnum.MANUAL_REVIEW;
   }
 }
 
 export function decideWithdrawalTransition(
-  ctx: WithdrawalTransitionContext,
+  ctx: WithdrawalTransitionContextInterface,
   event: WithdrawalEvent,
 ): WithdrawalAction {
   if (event.kind === 'USER_CANCEL') {
-    if (ctx.status === WithdrawalStatus.PENDING_DISPATCH) {
+    if (ctx.status === WithdrawalStatusEnum.PENDING_DISPATCH) {
       return { kind: 'FAIL_AND_RELEASE', markTerminalReturn: false };
     }
     if (
-      ctx.status === WithdrawalStatus.FAILED &&
-      ctx.failureReason === WithdrawalFailureReason.CANCELLED_BY_USER
+      ctx.status === WithdrawalStatusEnum.FAILED &&
+      ctx.failureReason === WithdrawalFailureReasonEnum.CANCELLED_BY_USER
     ) {
       return { kind: 'NOOP' };
     }
@@ -73,13 +71,13 @@ export function decideWithdrawalTransition(
   }
 
   if (event.kind === 'OPS_RESOLVE') {
-    if (ctx.status !== WithdrawalStatus.MANUAL_REVIEW) {
+    if (ctx.status !== WithdrawalStatusEnum.MANUAL_REVIEW) {
       return {
         kind: 'INVALID_TRANSITION',
         reason: `Cannot resolve withdrawal in status ${ctx.status}; MANUAL_REVIEW required`,
       };
     }
-    return event.outcome === WithdrawalOpsOutcome.SUCCEEDED
+    return event.outcome === WithdrawalOpsOutcomeEnum.SUCCEEDED
       ? { kind: 'SETTLE' }
       : { kind: 'FAIL_AND_RELEASE', markTerminalReturn: false };
   }
@@ -87,21 +85,21 @@ export function decideWithdrawalTransition(
   // event.kind === 'PROVIDER_STATUS'
   const providerStatus = event.status;
   if (
-    providerStatus === PayoutStatusValue.PENDING ||
-    providerStatus === PayoutStatusValue.PROCESSING
+    providerStatus === PayoutStatusValueEnum.PENDING ||
+    providerStatus === PayoutStatusValueEnum.PROCESSING
   ) {
-    return ctx.status === WithdrawalStatus.DISPATCHING
+    return ctx.status === WithdrawalStatusEnum.DISPATCHING
       ? { kind: 'ADVANCE_TO_PROCESSING' }
       : { kind: 'NOOP' };
   }
 
-  if (providerStatus === PayoutStatusValue.SUCCEEDED) {
-    if (ctx.status === WithdrawalStatus.SUCCEEDED) {
+  if (providerStatus === PayoutStatusValueEnum.SUCCEEDED) {
+    if (ctx.status === WithdrawalStatusEnum.SUCCEEDED) {
       return { kind: 'NOOP' };
     }
-    if (ctx.status === WithdrawalStatus.FAILED) {
+    if (ctx.status === WithdrawalStatusEnum.FAILED) {
       if (
-        ctx.failureReason === WithdrawalFailureReason.CANCELLED_BY_USER ||
+        ctx.failureReason === WithdrawalFailureReasonEnum.CANCELLED_BY_USER ||
         ctx.terminalReturn ||
         ctx.lateSuccessConflict ||
         ctx.hasPriorSettlementOrReturn
@@ -119,7 +117,7 @@ export function decideWithdrawalTransition(
     return { kind: 'NOOP' };
   }
 
-  if (providerStatus === PayoutStatusValue.FAILED) {
+  if (providerStatus === PayoutStatusValueEnum.FAILED) {
     if (INFLIGHT_STATUSES.has(ctx.status)) {
       return { kind: 'FAIL_AND_RELEASE', markTerminalReturn: false };
     }
@@ -127,13 +125,13 @@ export function decideWithdrawalTransition(
   }
 
   // RETURNED | REVERSED
-  if (ctx.status === WithdrawalStatus.SUCCEEDED) {
+  if (ctx.status === WithdrawalStatusEnum.SUCCEEDED) {
     return { kind: 'REVERSE_SUCCEEDED' };
   }
   if (INFLIGHT_STATUSES.has(ctx.status)) {
     return { kind: 'FAIL_AND_RELEASE', markTerminalReturn: true };
   }
-  if (ctx.status === WithdrawalStatus.FAILED && !ctx.terminalReturn) {
+  if (ctx.status === WithdrawalStatusEnum.FAILED && !ctx.terminalReturn) {
     return { kind: 'MARK_TERMINAL_RETURN_ONLY' };
   }
   return { kind: 'NOOP' };

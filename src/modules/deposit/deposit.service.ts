@@ -1,3 +1,4 @@
+import { parseValidated } from '../../common/utils/parse-validated.util.js';
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -11,19 +12,23 @@ import {
   ne,
   sql,
 } from 'drizzle-orm';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
+import { DepositStatusEnum } from '../../common/enums/deposit.enums.js';
 import {
-  Currency,
-  DepositStatus,
-  DiscrepancyRefType,
-  DiscrepancyStatus,
-  DiscrepancyType,
-  LedgerDirection,
-  LedgerRefType,
-  LedgerTxType,
-  PspStatusValue,
-  SystemOwnerId,
-  UserAccountType,
-} from '../../common/enums/domain.enums.js';
+  DiscrepancyRefTypeEnum,
+  DiscrepancyStatusEnum,
+  DiscrepancyTypeEnum,
+} from '../../common/enums/discrepancy.enums.js';
+import {
+  LedgerDirectionEnum,
+  LedgerRefTypeEnum,
+  LedgerTxTypeEnum,
+} from '../../common/enums/ledger.enums.js';
+import { PspStatusValueEnum } from '../../common/enums/provider.enums.js';
+import {
+  SystemOwnerIdEnum,
+  UserAccountTypeEnum,
+} from '../../common/enums/account.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -33,7 +38,7 @@ import {
 } from '../../common/utils/backoff.util.js';
 import { parseAmountToMinor } from '../../common/utils/money.util.js';
 import { assertValidUuid } from '../../common/utils/uuid-validation.util.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
+import { v7 as generateUuidV7 } from 'uuid';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import type {
@@ -43,7 +48,7 @@ import type {
 import {
   deposits,
   financialDiscrepancies,
-} from '../../database/schema/index.js';
+} from '../../database/schema/operations.schema.js';
 import {
   isCacheableRequestError,
   userIdempotencyScope,
@@ -62,7 +67,7 @@ import {
   computePostExpiryGracePollAt,
   toDepositDetailResponseDto,
 } from './deposit.mapper.js';
-import { pspCallbackPayloadSchema } from './deposit.schemas.js';
+import { PspCallbackPayloadDto } from './deposit.schemas.js';
 import type { DepositEntity } from './deposit.types.js';
 import type { DepositCreateDto } from './dto/deposit-create.dto.js';
 import type {
@@ -113,13 +118,16 @@ export class DepositService {
 
     let settledIdempotency = false;
     try {
-      const amountMinor = parseAmountToMinor(params.dto.amount, Currency.IRT);
+      const amountMinor = parseAmountToMinor(
+        params.dto.amount,
+        CurrencyEnum.IRT,
+      );
       await this._walletService.ensureUserScaffold({
         accountSpecs: [
           {
             userId: params.dto.userId,
-            currency: Currency.IRT,
-            accountType: UserAccountType.AVAILABLE,
+            currency: CurrencyEnum.IRT,
+            accountType: UserAccountTypeEnum.AVAILABLE,
           },
         ],
       });
@@ -199,7 +207,7 @@ export class DepositService {
   }
 
   async handlePspCallback(rawPayload: unknown): Promise<DepositCallbackAckDto> {
-    const parsed = pspCallbackPayloadSchema.safeParse(rawPayload);
+    const parsed = parseValidated(PspCallbackPayloadDto, rawPayload);
     if (!parsed.success || (!parsed.data.token && !parsed.data.orderId)) {
       return { received: true };
     }
@@ -211,7 +219,7 @@ export class DepositService {
       return { received: true };
     }
 
-    if (row.status === DepositStatus.SUCCEEDED) {
+    if (row.status === DepositStatusEnum.SUCCEEDED) {
       return {
         received: true,
         depositId: row.id,
@@ -248,7 +256,7 @@ export class DepositService {
     const validId = assertValidUuid(depositId, 'depositId');
     const row = await this._requireDeposit(validId);
 
-    if (row.status === DepositStatus.SUCCEEDED) {
+    if (row.status === DepositStatusEnum.SUCCEEDED) {
       return toDepositDetailResponseDto(row);
     }
 
@@ -265,13 +273,13 @@ export class DepositService {
       return this._recordOrderIdMismatch(row, inquiry.orderId);
     }
 
-    if (inquiry.status === PspStatusValue.INIT) {
+    if (inquiry.status === PspStatusValueEnum.INIT) {
       return this._handleInitStatus(row);
     }
 
     if (
-      inquiry.status === PspStatusValue.FAILED ||
-      inquiry.status === PspStatusValue.EXPIRED
+      inquiry.status === PspStatusValueEnum.FAILED ||
+      inquiry.status === PspStatusValueEnum.EXPIRED
     ) {
       return this._markDepositFailedIfUnsettled(row, null);
     }
@@ -279,9 +287,9 @@ export class DepositService {
     const verifyResult = await this._pspClient.verifyPayment(row.pspToken);
     if (verifyResult.kind === 'RETRYABLE_ERROR') {
       const nextStatus =
-        row.status === DepositStatus.FAILED
-          ? DepositStatus.FAILED
-          : DepositStatus.VERIFYING;
+        row.status === DepositStatusEnum.FAILED
+          ? DepositStatusEnum.FAILED
+          : DepositStatusEnum.VERIFYING;
       return this._reschedulePoll(row, nextStatus);
     }
 
@@ -310,7 +318,7 @@ export class DepositService {
           .from(deposits)
           .where(
             and(
-              ne(deposits.status, DepositStatus.SUCCEEDED),
+              ne(deposits.status, DepositStatusEnum.SUCCEEDED),
               isNotNull(deposits.nextPollAt),
               lte(deposits.nextPollAt, now),
             ),
@@ -394,7 +402,7 @@ export class DepositService {
         userId,
         requestedAmount: amountMinor.toString(),
         orderId,
-        status: DepositStatus.INITIATED,
+        status: DepositStatusEnum.INITIATED,
         nextPollAt: new Date(now.getTime() + this._getOrphanInitiatedAgeMs()),
       })
       .returning();
@@ -457,7 +465,7 @@ export class DepositService {
     const now = new Date();
     const body: DepositCreateResponseDto = {
       depositId: params.depositId,
-      status: DepositStatus.AWAITING_PAYMENT,
+      status: DepositStatusEnum.AWAITING_PAYMENT,
       paymentUrl: params.pspPayment.paymentUrl,
       expiresAt: params.pspPayment.expiresAt.toISOString(),
       createdAt: params.createdAt.toISOString(),
@@ -467,7 +475,7 @@ export class DepositService {
       const updated = await tx
         .update(deposits)
         .set({
-          status: DepositStatus.AWAITING_PAYMENT,
+          status: DepositStatusEnum.AWAITING_PAYMENT,
           pspToken: params.pspPayment.token,
           paymentUrl: params.pspPayment.paymentUrl,
           expiresAt: params.pspPayment.expiresAt,
@@ -480,7 +488,7 @@ export class DepositService {
         .where(
           and(
             eq(deposits.id, params.depositId),
-            eq(deposits.status, DepositStatus.INITIATED),
+            eq(deposits.status, DepositStatusEnum.INITIATED),
           ),
         )
         .returning({ id: deposits.id });
@@ -531,7 +539,7 @@ export class DepositService {
           and(
             eq(deposits.id, row.id),
             isNull(deposits.pspToken),
-            ne(deposits.status, DepositStatus.SUCCEEDED),
+            ne(deposits.status, DepositStatusEnum.SUCCEEDED),
           ),
         );
     } catch (err) {
@@ -584,7 +592,7 @@ export class DepositService {
   ): Promise<DepositDetailResponseDto> {
     const ageMs = Date.now() - row.createdAt.getTime();
     if (
-      row.status === DepositStatus.INITIATED &&
+      row.status === DepositStatusEnum.INITIATED &&
       ageMs >= this._getOrphanInitiatedAgeMs()
     ) {
       return this._markDepositFailedIfUnsettled(row, null);
@@ -608,9 +616,9 @@ export class DepositService {
       return this._markDepositFailedIfUnsettled(row, gracePollAt);
     }
     const targetStatus =
-      row.status === DepositStatus.FAILED
-        ? DepositStatus.FAILED
-        : DepositStatus.AWAITING_PAYMENT;
+      row.status === DepositStatusEnum.FAILED
+        ? DepositStatusEnum.FAILED
+        : DepositStatusEnum.AWAITING_PAYMENT;
     return this._reschedulePoll(row, targetStatus);
   }
 
@@ -626,10 +634,10 @@ export class DepositService {
     return this._recordVerificationIssue(
       row,
       {
-        status: expired ? DepositStatus.FAILED : row.status,
+        status: expired ? DepositStatusEnum.FAILED : row.status,
         nextPollAt: expired ? null : this._verificationRetryAt(),
       },
-      DiscrepancyType.ORDER_ID_MISMATCH,
+      DiscrepancyTypeEnum.ORDER_ID_MISMATCH,
       { expectedOrderId: row.orderId, actualOrderId },
     );
   }
@@ -640,16 +648,16 @@ export class DepositService {
   ): Promise<DepositDetailResponseDto> {
     return this._recordVerificationIssue(
       row,
-      { status: DepositStatus.VERIFYING, nextPollAt: null },
-      DiscrepancyType.VERIFIED_AMOUNT_OUT_OF_RANGE,
+      { status: DepositStatusEnum.VERIFYING, nextPollAt: null },
+      DiscrepancyTypeEnum.VERIFIED_AMOUNT_OUT_OF_RANGE,
       { reportedAmount },
     );
   }
 
   private async _recordVerificationIssue(
     row: DepositEntity,
-    patch: { status: DepositStatus; nextPollAt: Date | null },
-    type: DiscrepancyType,
+    patch: { status: DepositStatusEnum; nextPollAt: Date | null },
+    type: DiscrepancyTypeEnum,
     details: Record<string, unknown>,
   ): Promise<DepositDetailResponseDto> {
     const updated = await this._databaseService.runInTransaction(async (tx) => {
@@ -673,7 +681,7 @@ export class DepositService {
   private async _recordDepositDiscrepancy(
     tx: DbTransaction,
     row: DepositEntity,
-    type: DiscrepancyType,
+    type: DiscrepancyTypeEnum,
     amount: string,
     details: Record<string, unknown>,
   ): Promise<void> {
@@ -681,14 +689,14 @@ export class DepositService {
       .insert(financialDiscrepancies)
       .values({
         id: generateUuidV7(),
-        referenceType: DiscrepancyRefType.DEPOSIT,
+        referenceType: DiscrepancyRefTypeEnum.DEPOSIT,
         referenceId: row.id,
         userId: row.userId,
         discrepancyType: type,
         amount,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         providerPayload: details,
-        status: DiscrepancyStatus.OPEN,
+        status: DiscrepancyStatusEnum.OPEN,
       })
       .onConflictDoUpdate({
         target: [
@@ -697,7 +705,7 @@ export class DepositService {
           financialDiscrepancies.discrepancyType,
         ],
         set: {
-          status: DiscrepancyStatus.OPEN,
+          status: DiscrepancyStatusEnum.OPEN,
           amount,
           providerPayload: details,
         },
@@ -710,7 +718,7 @@ export class DepositService {
 
   private async _reschedulePoll(
     row: DepositEntity,
-    targetStatus: DepositStatus,
+    targetStatus: DepositStatusEnum,
   ): Promise<DepositDetailResponseDto> {
     return this._applyUnsettledPatch(row, {
       status: targetStatus,
@@ -723,14 +731,14 @@ export class DepositService {
     nextPollAt: Date | null,
   ): Promise<DepositDetailResponseDto> {
     return this._applyUnsettledPatch(row, {
-      status: DepositStatus.FAILED,
+      status: DepositStatusEnum.FAILED,
       nextPollAt,
     });
   }
 
   private async _applyUnsettledPatch(
     row: DepositEntity,
-    patch: { status: DepositStatus; nextPollAt: Date | null },
+    patch: { status: DepositStatusEnum; nextPollAt: Date | null },
   ): Promise<DepositDetailResponseDto> {
     const updated = await this._updateUnsettledDeposit(row, patch);
     return toDepositDetailResponseDto(
@@ -740,7 +748,7 @@ export class DepositService {
 
   private async _updateUnsettledDeposit(
     row: DepositEntity,
-    patch: { status: DepositStatus; nextPollAt: Date | null },
+    patch: { status: DepositStatusEnum; nextPollAt: Date | null },
     db: DbExecutor = this._databaseService.db,
   ): Promise<DepositEntity | undefined> {
     const now = new Date();
@@ -757,7 +765,7 @@ export class DepositService {
           eq(deposits.id, row.id),
           eq(deposits.status, row.status),
           eq(deposits.version, row.version),
-          ne(deposits.status, DepositStatus.SUCCEEDED),
+          ne(deposits.status, DepositStatusEnum.SUCCEEDED),
         ),
       )
       .returning();
@@ -784,14 +792,14 @@ export class DepositService {
     pspRefId: string | null;
   }): Promise<DepositDetailResponseDto> {
     const preRead = await this._requireDeposit(params.depositId);
-    if (preRead.status === DepositStatus.SUCCEEDED) {
+    if (preRead.status === DepositStatusEnum.SUCCEEDED) {
       return toDepositDetailResponseDto(preRead);
     }
 
     const availableSpec = {
       userId: preRead.userId,
-      currency: Currency.IRT,
-      accountType: UserAccountType.AVAILABLE,
+      currency: CurrencyEnum.IRT,
+      accountType: UserAccountTypeEnum.AVAILABLE,
     };
 
     await this._walletService.ensureUserScaffold({
@@ -814,7 +822,7 @@ export class DepositService {
         );
       }
 
-      if (locked.status === DepositStatus.SUCCEEDED) {
+      if (locked.status === DepositStatusEnum.SUCCEEDED) {
         return locked;
       }
 
@@ -835,7 +843,7 @@ export class DepositService {
           (await this._updateUnsettledDeposit(
             locked,
             {
-              status: DepositStatus.VERIFYING,
+              status: DepositStatusEnum.VERIFYING,
               nextPollAt: null,
             },
             tx,
@@ -853,13 +861,13 @@ export class DepositService {
       );
       const pspClearing = await this._walletService.getSystemAccount(
         tx,
-        SystemOwnerId.PSP_CLEARING,
-        Currency.IRT,
+        SystemOwnerIdEnum.PSP_CLEARING,
+        CurrencyEnum.IRT,
       );
 
       await this._ledgerService.postTransaction(tx, {
-        type: LedgerTxType.DEPOSIT,
-        referenceType: LedgerRefType.DEPOSIT,
+        type: LedgerTxTypeEnum.DEPOSIT,
+        referenceType: LedgerRefTypeEnum.DEPOSIT,
         referenceId: locked.id,
         description: `PSP deposit verified (${locked.orderId})`,
         metadata: {
@@ -870,12 +878,12 @@ export class DepositService {
         postings: [
           {
             account: pspClearing,
-            direction: LedgerDirection.DEBIT,
+            direction: LedgerDirectionEnum.DEBIT,
             amount: params.verifiedAmountIrt,
           },
           {
             account: userAvailable,
-            direction: LedgerDirection.CREDIT,
+            direction: LedgerDirectionEnum.CREDIT,
             amount: params.verifiedAmountIrt,
           },
         ],
@@ -889,7 +897,7 @@ export class DepositService {
       const [updated] = await tx
         .update(deposits)
         .set({
-          status: DepositStatus.SUCCEEDED,
+          status: DepositStatusEnum.SUCCEEDED,
           verifiedAmount: params.verifiedAmountIrt.toString(),
           amountMismatch,
           pspRefId: params.pspRefId,
@@ -903,15 +911,15 @@ export class DepositService {
 
       await tx
         .update(financialDiscrepancies)
-        .set({ status: DiscrepancyStatus.RESOLVED })
+        .set({ status: DiscrepancyStatusEnum.RESOLVED })
         .where(
           and(
             eq(
               financialDiscrepancies.referenceType,
-              DiscrepancyRefType.DEPOSIT,
+              DiscrepancyRefTypeEnum.DEPOSIT,
             ),
             eq(financialDiscrepancies.referenceId, locked.id),
-            eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN),
+            eq(financialDiscrepancies.status, DiscrepancyStatusEnum.OPEN),
           ),
         );
 
@@ -919,7 +927,7 @@ export class DepositService {
         await this._recordDepositDiscrepancy(
           tx,
           locked,
-          DiscrepancyType.AMOUNT_MISMATCH,
+          DiscrepancyTypeEnum.AMOUNT_MISMATCH,
           params.verifiedAmountIrt.toString(),
           {
             requestedAmount: locked.requestedAmount,
@@ -940,9 +948,9 @@ export class DepositService {
     tx: DbTransaction,
     row: DepositEntity,
     verification: { verifiedAmountIrt: bigint; pspRefId: string | null },
-  ): Promise<DiscrepancyType | null> {
+  ): Promise<DiscrepancyTypeEnum | null> {
     if (verification.verifiedAmountIrt > BigInt(row.requestedAmount)) {
-      return DiscrepancyType.DEPOSIT_OVERPAYMENT;
+      return DiscrepancyTypeEnum.DEPOSIT_OVERPAYMENT;
     }
     const ref = verification.pspRefId;
     if (!ref) {
@@ -958,7 +966,7 @@ export class DepositService {
       .from(deposits)
       .where(and(eq(deposits.pspRefId, ref), ne(deposits.id, row.id)))
       .limit(1);
-    return existing ? DiscrepancyType.PSP_REFERENCE_REUSED : null;
+    return existing ? DiscrepancyTypeEnum.PSP_REFERENCE_REUSED : null;
   }
 
   private readonly _logger = new Logger(DepositService.name);

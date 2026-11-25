@@ -2,23 +2,23 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { eq, sql } from 'drizzle-orm';
 import { PAUSED_WITHDRAWALS_CONTROL_KEY } from '../../common/constants/system-controls.constants.js';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
+import { DiscrepancyStatusEnum } from '../../common/enums/discrepancy.enums.js';
 import {
-  Currency,
-  DiscrepancyStatus,
-  LedgerDirection,
-  LedgerRefType,
-  LedgerTxType,
-  OutboxStatus,
-  UserAccountType,
-  WithdrawalStatus,
-} from '../../common/enums/domain.enums.js';
+  LedgerDirectionEnum,
+  LedgerRefTypeEnum,
+  LedgerTxTypeEnum,
+} from '../../common/enums/ledger.enums.js';
+import { OutboxStatusEnum } from '../../common/enums/outbox.enums.js';
+import { UserAccountTypeEnum } from '../../common/enums/account.enums.js';
+import { WithdrawalStatusEnum } from '../../common/enums/withdrawal.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   formatMinorToApi,
   parseAmountToMinor,
 } from '../../common/utils/money.util.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
+import { v7 as generateUuidV7 } from 'uuid';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
 import type { DbExecutor } from '../../database/database.types.js';
@@ -27,8 +27,8 @@ import {
   outboxEvents,
   systemControls,
   withdrawals,
-} from '../../database/schema/index.js';
-import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
+} from '../../database/schema/operations.schema.js';
+import type { IdempotentExecutionResultInterface } from '../idempotency/idempotency.interface.js';
 import { userIdempotencyScope } from '../idempotency/idempotency.util.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
@@ -54,24 +54,24 @@ export class InternalOpsService {
     requestHash?: string;
     dto: ReceivableSettleDto;
     operatorId: string;
-  }): Promise<IdempotentExecutionResult<ReceivableSettleResponseDto>> {
+  }): Promise<IdempotentExecutionResultInterface<ReceivableSettleResponseDto>> {
     const { dto } = params;
     const otherCcy =
-      dto.currency === Currency.IRT ? Currency.USDT : Currency.IRT;
+      dto.currency === CurrencyEnum.IRT ? CurrencyEnum.USDT : CurrencyEnum.IRT;
     const availableSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: UserAccountType.AVAILABLE,
+      accountType: UserAccountTypeEnum.AVAILABLE,
     };
     const receivableSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: UserAccountType.RECEIVABLE,
+      accountType: UserAccountTypeEnum.RECEIVABLE,
     };
     const otherReceivableSpec = {
       userId: dto.userId,
       currency: otherCcy,
-      accountType: UserAccountType.RECEIVABLE,
+      accountType: UserAccountTypeEnum.RECEIVABLE,
     };
 
     await this._walletService.ensureUserScaffold({
@@ -126,8 +126,8 @@ export class InternalOpsService {
           const settlementId = generateUuidV7();
 
           await this._ledgerService.postTransaction(tx, {
-            type: LedgerTxType.RECEIVABLE_SETTLE,
-            referenceType: LedgerRefType.ADJUSTMENT,
+            type: LedgerTxTypeEnum.RECEIVABLE_SETTLE,
+            referenceType: LedgerRefTypeEnum.ADJUSTMENT,
             referenceId: settlementId,
             description: `Manual/ops settlement of ${dto.currency} receivable balance`,
             metadata: {
@@ -138,12 +138,12 @@ export class InternalOpsService {
             postings: [
               {
                 account: userAvailable,
-                direction: LedgerDirection.DEBIT,
+                direction: LedgerDirectionEnum.DEBIT,
                 amount: settleAmount,
               },
               {
                 account: userReceivable,
-                direction: LedgerDirection.CREDIT,
+                direction: LedgerDirectionEnum.CREDIT,
                 amount: settleAmount,
               },
             ],
@@ -179,7 +179,7 @@ export class InternalOpsService {
     dto: WithdrawalsPauseDto;
     idempotencyKey: string;
     requestHash?: string;
-  }): Promise<IdempotentExecutionResult<WithdrawalsPauseResponseDto>> {
+  }): Promise<IdempotentExecutionResultInterface<WithdrawalsPauseResponseDto>> {
     const { dto } = params;
     return this._idempotencyService.executeInTransaction({
       scope: 'POST:/internal/controls/withdrawals-pause',
@@ -271,15 +271,15 @@ export class InternalOpsService {
       this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(financialDiscrepancies)
-        .where(eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN)),
+        .where(eq(financialDiscrepancies.status, DiscrepancyStatusEnum.OPEN)),
       this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(withdrawals)
-        .where(eq(withdrawals.status, WithdrawalStatus.MANUAL_REVIEW)),
+        .where(eq(withdrawals.status, WithdrawalStatusEnum.MANUAL_REVIEW)),
       this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(outboxEvents)
-        .where(eq(outboxEvents.status, OutboxStatus.PENDING)),
+        .where(eq(outboxEvents.status, OutboxStatusEnum.PENDING)),
       this._getCachedBalanceDriftAccounts(),
       this._databaseService.db
         .select({ value: systemControls.value })
@@ -289,9 +289,9 @@ export class InternalOpsService {
     ]);
 
     const pausedRaw = pauseControl[0]?.value?.currencies;
-    const pausedWithdrawalCurrencies: Currency[] = Array.isArray(pausedRaw)
+    const pausedWithdrawalCurrencies: CurrencyEnum[] = Array.isArray(pausedRaw)
       ? pausedRaw.filter(
-          (item): item is Currency => item === 'IRT' || item === 'USDT',
+          (item): item is CurrencyEnum => item === 'IRT' || item === 'USDT',
         )
       : [];
 
@@ -305,11 +305,13 @@ export class InternalOpsService {
   }
 
   formatPrometheusMetrics(metrics: InternalMetricsResponseDto): string {
-    const irtPaused = metrics.pausedWithdrawalCurrencies.includes(Currency.IRT)
+    const irtPaused = metrics.pausedWithdrawalCurrencies.includes(
+      CurrencyEnum.IRT,
+    )
       ? 1
       : 0;
     const usdtPaused = metrics.pausedWithdrawalCurrencies.includes(
-      Currency.USDT,
+      CurrencyEnum.USDT,
     )
       ? 1
       : 0;

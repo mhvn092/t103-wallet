@@ -1,20 +1,22 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, like, lt, or, sql } from 'drizzle-orm';
 import {
-  AccountOwnerType,
-  AccountType,
-  DiscrepancyStatus,
-  DiscrepancyType,
-  WalletAccountFilter,
-} from '../../common/enums/domain.enums.js';
+  AccountOwnerTypeEnum,
+  AccountTypeEnum,
+  WalletAccountFilterEnum,
+} from '../../common/enums/account.enums.js';
+import {
+  DiscrepancyStatusEnum,
+  DiscrepancyTypeEnum,
+} from '../../common/enums/discrepancy.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   CURRENCIES,
-  type Currency,
-  formatMinorToApi,
-} from '../../common/utils/money.util.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
+  type CurrencyEnum,
+} from '../../common/enums/currency.enum.js';
+import { formatMinorToApi } from '../../common/utils/money.util.js';
+import { v7 as generateUuidV7 } from 'uuid';
 import { DatabaseService } from '../../database/database.service.js';
 import type {
   DbExecutor,
@@ -23,22 +25,28 @@ import type {
 import {
   type AccountEntity,
   accounts,
-  financialDiscrepancies,
-  ledgerItems,
-  ledgerTransactions,
   userDailyLimits,
   userRestrictions,
-} from '../../database/schema/index.js';
+} from '../../database/schema/accounts.schema.js';
+import { financialDiscrepancies } from '../../database/schema/operations.schema.js';
+import {
+  ledgerItems,
+  ledgerTransactions,
+} from '../../database/schema/ledger.schema.js';
 import { WalletBalancesResponseDto } from './dto/wallet-balance-response.dto.js';
 import { WalletLedgerResponseDto } from './dto/wallet-ledger-response.dto.js';
+import type {
+  AccountSpecInterface,
+  WalletBalanceViewInterface,
+} from './wallet.interface.js';
 import {
-  type AccountSpec,
-  type SystemOwnerId,
   USER_ACCOUNT_NORMAL_SIDE,
   USER_TO_ACCOUNT_TYPE,
-  UserAccountType,
-  type WalletBalanceView,
-} from './wallet.types.js';
+} from './wallet.constants.js';
+import {
+  UserAccountTypeEnum,
+  type SystemOwnerIdEnum,
+} from '../../common/enums/account.enums.js';
 
 @Injectable()
 export class WalletService {
@@ -49,7 +57,7 @@ export class WalletService {
    * never cause unique-index XID deadlocks or rollback tuple bloat under concurrency.
    */
   async ensureUserScaffold(params: {
-    accountSpecs: AccountSpec[];
+    accountSpecs: AccountSpecInterface[];
     dailyLimitKeys?: Array<{ userId: string; limitDate: string }>;
     restrictionUserIds?: string[];
   }): Promise<void> {
@@ -95,7 +103,7 @@ export class WalletService {
    */
   async lockUserAccountsCanonical(
     tx: DbTransaction,
-    specs: AccountSpec[],
+    specs: AccountSpecInterface[],
   ): Promise<Map<string, AccountEntity>> {
     const sortedSpecs = this._sortAccountSpecs(specs);
     if (!sortedSpecs.length) {
@@ -107,7 +115,7 @@ export class WalletService {
       .from(accounts)
       .where(
         and(
-          eq(accounts.ownerType, AccountOwnerType.USER),
+          eq(accounts.ownerType, AccountOwnerTypeEnum.USER),
           or(
             ...sortedSpecs.map((spec) =>
               and(
@@ -138,7 +146,7 @@ export class WalletService {
 
   getRequiredLockedAccount(
     map: ReadonlyMap<string, AccountEntity>,
-    spec: AccountSpec,
+    spec: AccountSpecInterface,
   ): AccountEntity {
     const key = `${spec.userId}|${spec.currency}|${spec.accountType}`;
     const row = map.get(key);
@@ -157,15 +165,15 @@ export class WalletService {
    */
   async getSystemAccount(
     executor: DbExecutor,
-    ownerId: SystemOwnerId,
-    currency: Currency,
+    ownerId: SystemOwnerIdEnum,
+    currency: CurrencyEnum,
   ): Promise<AccountEntity> {
     const [row] = await executor
       .select()
       .from(accounts)
       .where(
         and(
-          eq(accounts.ownerType, AccountOwnerType.SYSTEM),
+          eq(accounts.ownerType, AccountOwnerTypeEnum.SYSTEM),
           eq(accounts.ownerId, ownerId),
           eq(accounts.currency, currency),
         ),
@@ -192,7 +200,7 @@ export class WalletService {
       .from(accounts)
       .where(
         and(
-          eq(accounts.ownerType, AccountOwnerType.USER),
+          eq(accounts.ownerType, AccountOwnerTypeEnum.USER),
           eq(accounts.ownerId, userId),
         ),
       );
@@ -205,21 +213,23 @@ export class WalletService {
       );
     }
 
-    const balances: WalletBalanceView[] = CURRENCIES.map((currency) => ({
-      currency,
-      available: formatMinorToApi(
-        byKey.get(`${currency}|${AccountType.AVAILABLE}`) ?? 0n,
+    const balances: WalletBalanceViewInterface[] = CURRENCIES.map(
+      (currency) => ({
         currency,
-      ),
-      locked: formatMinorToApi(
-        byKey.get(`${currency}|${AccountType.LOCKED}`) ?? 0n,
-        currency,
-      ),
-      receivable: formatMinorToApi(
-        byKey.get(`${currency}|${AccountType.RECEIVABLE}`) ?? 0n,
-        currency,
-      ),
-    }));
+        available: formatMinorToApi(
+          byKey.get(`${currency}|${AccountTypeEnum.AVAILABLE}`) ?? 0n,
+          currency,
+        ),
+        locked: formatMinorToApi(
+          byKey.get(`${currency}|${AccountTypeEnum.LOCKED}`) ?? 0n,
+          currency,
+        ),
+        receivable: formatMinorToApi(
+          byKey.get(`${currency}|${AccountTypeEnum.RECEIVABLE}`) ?? 0n,
+          currency,
+        ),
+      }),
+    );
 
     return { userId, balances };
   }
@@ -228,17 +238,17 @@ export class WalletService {
     userId: string;
     limit: number;
     cursor?: bigint;
-    accountType?: WalletAccountFilter;
-    currency?: Currency;
+    accountType?: WalletAccountFilterEnum;
+    currency?: CurrencyEnum;
   }): Promise<WalletLedgerResponseDto> {
-    const accountFilter = params.accountType ?? WalletAccountFilter.ALL;
+    const accountFilter = params.accountType ?? WalletAccountFilterEnum.ALL;
     const conditions = [eq(ledgerItems.userId, params.userId)];
 
-    if (accountFilter !== WalletAccountFilter.ALL) {
+    if (accountFilter !== WalletAccountFilterEnum.ALL) {
       conditions.push(
         eq(
           ledgerItems.accountType,
-          USER_TO_ACCOUNT_TYPE[accountFilter as unknown as UserAccountType],
+          USER_TO_ACCOUNT_TYPE[accountFilter as unknown as UserAccountTypeEnum],
         ),
       );
     }
@@ -316,21 +326,21 @@ export class WalletService {
   async clearReceivableRestriction(
     tx: DbTransaction,
     userId: string,
-    currency: Currency,
+    currency: CurrencyEnum,
     allCleared: boolean,
   ): Promise<boolean> {
     await tx
       .update(financialDiscrepancies)
-      .set({ status: DiscrepancyStatus.RESOLVED })
+      .set({ status: DiscrepancyStatusEnum.RESOLVED })
       .where(
         and(
           eq(financialDiscrepancies.userId, userId),
           eq(financialDiscrepancies.currency, currency),
           eq(
             financialDiscrepancies.discrepancyType,
-            DiscrepancyType.LATE_SUCCESS_CONFLICT,
+            DiscrepancyTypeEnum.LATE_SUCCESS_CONFLICT,
           ),
-          eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN),
+          eq(financialDiscrepancies.status, DiscrepancyStatusEnum.OPEN),
         ),
       );
 
@@ -390,7 +400,7 @@ export class WalletService {
   }
 
   private async _ensureMissingAccounts(
-    dedupedSpecs: AccountSpec[],
+    dedupedSpecs: AccountSpecInterface[],
   ): Promise<void> {
     const userIds = [...new Set(dedupedSpecs.map((s) => s.userId))];
     const existing = await this._databaseService.db
@@ -402,7 +412,7 @@ export class WalletService {
       .from(accounts)
       .where(
         and(
-          eq(accounts.ownerType, AccountOwnerType.USER),
+          eq(accounts.ownerType, AccountOwnerTypeEnum.USER),
           inArray(accounts.ownerId, userIds),
         ),
       );
@@ -420,7 +430,7 @@ export class WalletService {
         .values(
           missing.map((spec) => ({
             id: generateUuidV7(),
-            ownerType: AccountOwnerType.USER,
+            ownerType: AccountOwnerTypeEnum.USER,
             ownerId: spec.userId,
             currency: spec.currency,
             accountType: USER_TO_ACCOUNT_TYPE[spec.accountType],
@@ -432,8 +442,10 @@ export class WalletService {
     }
   }
 
-  private _sortAccountSpecs(specs: AccountSpec[]): AccountSpec[] {
-    const unique = new Map<string, AccountSpec>();
+  private _sortAccountSpecs(
+    specs: AccountSpecInterface[],
+  ): AccountSpecInterface[] {
+    const unique = new Map<string, AccountSpecInterface>();
     for (const spec of specs) {
       unique.set(`${spec.userId}|${spec.currency}|${spec.accountType}`, spec);
     }

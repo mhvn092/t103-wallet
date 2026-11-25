@@ -1,5 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
+import {
+  CURRENCIES,
+  type CurrencyEnum,
+} from '../../../common/enums/currency.enum.js';
 
 export class InternalMetricsResponseDto {
   @ApiProperty({ example: 0 })
@@ -15,5 +18,5 @@ export class InternalMetricsResponseDto {
   balanceDriftAccounts!: number;
 
   @ApiProperty({ enum: CURRENCIES, isArray: true, example: [] })
-  pausedWithdrawalCurrencies!: Currency[];
+  pausedWithdrawalCurrencies!: CurrencyEnum[];
 }

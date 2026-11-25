@@ -1,9 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
+import {
+  CURRENCIES,
+  type CurrencyEnum,
+} from '../../../common/enums/currency.enum.js';
 
 class WalletBalanceItemDto {
   @ApiProperty({ enum: CURRENCIES, example: 'IRT' })
-  currency!: Currency;
+  currency!: CurrencyEnum;
 
   @ApiProperty({ example: '1500000' })
   available!: string;

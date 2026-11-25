@@ -1,27 +1,30 @@
 import { describe, expect, it } from 'vitest';
+import { PayoutStatusValueEnum } from '../../common/enums/provider.enums.js';
 import {
-  PayoutStatusValue,
-  WithdrawalFailureReason,
-  WithdrawalOpsOutcome,
-  WithdrawalStatus,
-} from '../../common/enums/domain.enums.js';
+  WithdrawalFailureReasonEnum,
+  WithdrawalOpsOutcomeEnum,
+  WithdrawalStatusEnum,
+} from '../../common/enums/withdrawal.enums.js';
 import { decideWithdrawalTransition } from './withdrawal-state-machine.util.js';
 
-const ALL_STATUSES: WithdrawalStatus[] = Object.values(WithdrawalStatus);
-const PROVIDER_EVENTS: PayoutStatusValue[] = Object.values(PayoutStatusValue);
+const ALL_STATUSES: WithdrawalStatusEnum[] =
+  Object.values(WithdrawalStatusEnum);
+const PROVIDER_EVENTS: PayoutStatusValueEnum[] = Object.values(
+  PayoutStatusValueEnum,
+);
 
 describe('withdrawal-state-machine.util', () => {
   it('blocks false WD_LATE_SUCCESS after RETURNED/REVERSED while PROCESSING (F-01)', () => {
     const onReturned = decideWithdrawalTransition(
       {
-        status: WithdrawalStatus.PROCESSING,
+        status: WithdrawalStatusEnum.PROCESSING,
         failureReason: null,
         terminalReturn: false,
         lateSuccessConflict: false,
         hasPriorSettlementOrReturn: false,
         authoritativeConfirmed: false,
       },
-      { kind: 'PROVIDER_STATUS', status: PayoutStatusValue.RETURNED },
+      { kind: 'PROVIDER_STATUS', status: PayoutStatusValueEnum.RETURNED },
     );
     expect(onReturned).toEqual({
       kind: 'FAIL_AND_RELEASE',
@@ -30,14 +33,14 @@ describe('withdrawal-state-machine.util', () => {
 
     const delayedSucceeded = decideWithdrawalTransition(
       {
-        status: WithdrawalStatus.FAILED,
-        failureReason: WithdrawalFailureReason.BANK_RETURNED,
+        status: WithdrawalStatusEnum.FAILED,
+        failureReason: WithdrawalFailureReasonEnum.BANK_RETURNED,
         terminalReturn: true,
         lateSuccessConflict: false,
         hasPriorSettlementOrReturn: false,
         authoritativeConfirmed: true,
       },
-      { kind: 'PROVIDER_STATUS', status: PayoutStatusValue.SUCCEEDED },
+      { kind: 'PROVIDER_STATUS', status: PayoutStatusValueEnum.SUCCEEDED },
     );
     expect(delayedSucceeded).toEqual({ kind: 'NOOP' });
   });
@@ -45,27 +48,27 @@ describe('withdrawal-state-machine.util', () => {
   it('requires authoritative verification on unconfirmed webhook SUCCEEDED when FAILED', () => {
     const unverifiedWebhook = decideWithdrawalTransition(
       {
-        status: WithdrawalStatus.FAILED,
-        failureReason: WithdrawalFailureReason.PROVIDER_FAILED,
+        status: WithdrawalStatusEnum.FAILED,
+        failureReason: WithdrawalFailureReasonEnum.PROVIDER_FAILED,
         terminalReturn: false,
         lateSuccessConflict: false,
         hasPriorSettlementOrReturn: false,
         authoritativeConfirmed: false,
       },
-      { kind: 'PROVIDER_STATUS', status: PayoutStatusValue.SUCCEEDED },
+      { kind: 'PROVIDER_STATUS', status: PayoutStatusValueEnum.SUCCEEDED },
     );
     expect(unverifiedWebhook).toEqual({ kind: 'NEEDS_AUTHORITATIVE_VERIFY' });
 
     const verifiedPoller = decideWithdrawalTransition(
       {
-        status: WithdrawalStatus.FAILED,
-        failureReason: WithdrawalFailureReason.PROVIDER_FAILED,
+        status: WithdrawalStatusEnum.FAILED,
+        failureReason: WithdrawalFailureReasonEnum.PROVIDER_FAILED,
         terminalReturn: false,
         lateSuccessConflict: false,
         hasPriorSettlementOrReturn: false,
         authoritativeConfirmed: true,
       },
-      { kind: 'PROVIDER_STATUS', status: PayoutStatusValue.SUCCEEDED },
+      { kind: 'PROVIDER_STATUS', status: PayoutStatusValueEnum.SUCCEEDED },
     );
     expect(verifiedPoller).toEqual({ kind: 'LATE_SUCCESS_CLAWBACK' });
   });
@@ -73,14 +76,14 @@ describe('withdrawal-state-machine.util', () => {
   it('marks terminalReturn on FAILED rows receiving delayed RETURNED/REVERSED', () => {
     const action = decideWithdrawalTransition(
       {
-        status: WithdrawalStatus.FAILED,
-        failureReason: WithdrawalFailureReason.PROVIDER_FAILED,
+        status: WithdrawalStatusEnum.FAILED,
+        failureReason: WithdrawalFailureReasonEnum.PROVIDER_FAILED,
         terminalReturn: false,
         lateSuccessConflict: false,
         hasPriorSettlementOrReturn: false,
         authoritativeConfirmed: false,
       },
-      { kind: 'PROVIDER_STATUS', status: PayoutStatusValue.REVERSED },
+      { kind: 'PROVIDER_STATUS', status: PayoutStatusValueEnum.REVERSED },
     );
     expect(action).toEqual({ kind: 'MARK_TERMINAL_RETURN_ONLY' });
   });
@@ -98,7 +101,7 @@ describe('withdrawal-state-machine.util', () => {
         },
         { kind: 'USER_CANCEL' },
       );
-      if (status === WithdrawalStatus.PENDING_DISPATCH) {
+      if (status === WithdrawalStatusEnum.PENDING_DISPATCH) {
         expect(cancelAction).toEqual({
           kind: 'FAIL_AND_RELEASE',
           markTerminalReturn: false,
@@ -116,10 +119,10 @@ describe('withdrawal-state-machine.util', () => {
           hasPriorSettlementOrReturn: false,
           authoritativeConfirmed: true,
         },
-        { kind: 'OPS_RESOLVE', outcome: WithdrawalOpsOutcome.SUCCEEDED },
+        { kind: 'OPS_RESOLVE', outcome: WithdrawalOpsOutcomeEnum.SUCCEEDED },
       );
       expect(resolveOk.kind).toBe(
-        status === WithdrawalStatus.MANUAL_REVIEW
+        status === WithdrawalStatusEnum.MANUAL_REVIEW
           ? 'SETTLE'
           : 'INVALID_TRANSITION',
       );

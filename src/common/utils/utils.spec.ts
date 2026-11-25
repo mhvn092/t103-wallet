@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { addPositiveJitterMs, computeSafeLeaseMs } from './backoff.util.js';
 import { sha256CanonicalJson } from './canonical-json.util.js';
 import { getTehranDateString } from './tehran-date.util.js';
-import { generateUuidV7, uuidV7LowerBoundForMs } from './uuidv7.util.js';
+import { v7 as generateUuidV7 } from 'uuid';
+import { uuidV7LowerBoundForMs } from './uuidv7.util.js';
 
 describe('core utilities (uuidv7, canonical-json, tehran-date)', () => {
   it('generates monotonic RFC-9562 UUIDv7 strings', () => {

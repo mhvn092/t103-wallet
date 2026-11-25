@@ -1,26 +1,26 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { AccountOwnerTypeEnum } from '../../common/enums/account.enums.js';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
+import { LedgerDirectionEnum } from '../../common/enums/ledger.enums.js';
 import {
-  AccountOwnerType,
-  Currency,
-  LedgerDirection,
-  OutboxEventType,
-  OutboxStatus,
-} from '../../common/enums/domain.enums.js';
+  OutboxEventTypeEnum,
+  OutboxStatusEnum,
+} from '../../common/enums/outbox.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import { formatMinorToApi } from '../../common/utils/money.util.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
+import { v7 as generateUuidV7 } from 'uuid';
 import type { DbTransaction } from '../../database/database.types.js';
 import {
   ledgerItems,
   ledgerTransactions,
-  outboxEvents,
-} from '../../database/schema/index.js';
+} from '../../database/schema/ledger.schema.js';
+import { outboxEvents } from '../../database/schema/operations.schema.js';
 import type {
-  LedgerPostingLine,
-  PostLedgerTxInput,
-  PostLedgerTxResult,
-} from './ledger.types.js';
+  LedgerPostingLineInterface,
+  PostLedgerTxInputInterface,
+  PostLedgerTxResultInterface,
+} from './ledger.interface.js';
 
 @Injectable()
 export class LedgerService {
@@ -34,8 +34,8 @@ export class LedgerService {
    */
   async postTransaction(
     tx: DbTransaction,
-    input: PostLedgerTxInput,
-  ): Promise<PostLedgerTxResult> {
+    input: PostLedgerTxInputInterface,
+  ): Promise<PostLedgerTxResultInterface> {
     this._validateBalancedPostings(input.postings);
 
     const txId = generateUuidV7();
@@ -55,7 +55,7 @@ export class LedgerService {
           transactionId: txId,
           accountId: line.account.id,
           userId:
-            line.account.ownerType === AccountOwnerType.USER
+            line.account.ownerType === AccountOwnerTypeEnum.USER
               ? line.account.ownerId
               : null,
           accountType: line.account.accountType,
@@ -88,7 +88,7 @@ export class LedgerService {
     if (userChanges.length > 0) {
       await tx.insert(outboxEvents).values({
         id: generateUuidV7(),
-        eventType: OutboxEventType.BALANCE_CHANGED,
+        eventType: OutboxEventTypeEnum.BALANCE_CHANGED,
         payload: {
           transactionId: txId,
           transactionType: input.type,
@@ -97,7 +97,7 @@ export class LedgerService {
           changes: userChanges,
           occurredAt: new Date().toISOString(),
         },
-        status: OutboxStatus.PENDING,
+        status: OutboxStatusEnum.PENDING,
       });
     }
 
@@ -117,7 +117,9 @@ export class LedgerService {
     };
   }
 
-  private _validateBalancedPostings(postings: LedgerPostingLine[]): void {
+  private _validateBalancedPostings(
+    postings: LedgerPostingLineInterface[],
+  ): void {
     if (postings.length < 2) {
       throw new DomainException(
         HttpStatus.INTERNAL_SERVER_ERROR,
@@ -126,7 +128,7 @@ export class LedgerService {
       );
     }
 
-    const totals = new Map<Currency, { debit: bigint; credit: bigint }>();
+    const totals = new Map<CurrencyEnum, { debit: bigint; credit: bigint }>();
     for (const line of postings) {
       if (line.amount <= 0n) {
         throw new DomainException(
@@ -139,7 +141,7 @@ export class LedgerService {
         debit: 0n,
         credit: 0n,
       };
-      if (line.direction === LedgerDirection.DEBIT) {
+      if (line.direction === LedgerDirectionEnum.DEBIT) {
         accTotals.debit += line.amount;
       } else {
         accTotals.credit += line.amount;

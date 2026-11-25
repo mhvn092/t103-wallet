@@ -1,9 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
-import { CURRENCIES, Currency } from '../enums/domain.enums.js';
+import { CurrencyEnum } from '../enums/currency.enum.js';
 import { DomainException } from '../errors/domain.exception.js';
 import { ErrorCode } from '../errors/error-codes.js';
-
-export { CURRENCIES, Currency };
 
 const USDT_SCALE = 6;
 export const USDT_MINOR_PER_UNIT = 1_000_000n;
@@ -24,11 +22,11 @@ function assertWithinMaxAmount(minor: bigint): bigint {
 
 export function parseAmountToMinor(
   raw: string,
-  currency: Currency,
+  currency: CurrencyEnum,
   options: { allowZero?: boolean } = {},
 ): bigint {
   const trimmed = raw.trim();
-  if (currency === 'IRT') {
+  if (currency === CurrencyEnum.IRT) {
     if (options.allowZero && trimmed === '0') {
       return 0n;
     }
@@ -64,7 +62,10 @@ export function parseAmountToMinor(
   return assertWithinMaxAmount(minor);
 }
 
-export function formatMinorToApi(minor: bigint, currency: Currency): string {
+export function formatMinorToApi(
+  minor: bigint,
+  currency: CurrencyEnum,
+): string {
   if (minor < 0n) {
     throw new DomainException(
       HttpStatus.INTERNAL_SERVER_ERROR,
@@ -72,7 +73,7 @@ export function formatMinorToApi(minor: bigint, currency: Currency): string {
       `Unexpected negative minor unit: ${minor.toString()}`,
     );
   }
-  if (currency === 'IRT') {
+  if (currency === CurrencyEnum.IRT) {
     return minor.toString();
   }
   if (minor === 0n) {

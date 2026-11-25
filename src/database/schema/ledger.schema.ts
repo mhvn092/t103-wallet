@@ -17,12 +17,14 @@ import {
   ledgerDirectionEnum,
   ledgerRefTypeEnum,
   ledgerTxTypeEnum,
-} from './enums.js';
+} from './pg-enums.schema.js';
 
 export const ledgerTransactions = pgTable(
   'ledger_transactions',
   {
-    id: uuid('id').primaryKey(),
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`uuidv7()`),
     type: ledgerTxTypeEnum('type').notNull(),
     referenceType: ledgerRefTypeEnum('reference_type').notNull(),
     referenceId: uuid('reference_id').notNull(),

@@ -1,6 +1,7 @@
+import { parseValidated } from '../../common/utils/parse-validated.util.js';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PspVerifyStatusValue } from '../../common/enums/domain.enums.js';
+import { PspVerifyStatusValueEnum } from '../../common/enums/provider.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import type { EnvConfig } from '../../config/env.validation.js';
@@ -14,9 +15,9 @@ import type {
   PspVerifyResult,
 } from './provider.types.js';
 import {
-  pspCreatePaymentResponseSchema,
-  pspPaymentStatusSchema,
-  pspVerifyResponseSchema,
+  PspCreatePaymentResponseDto,
+  PspPaymentStatusDto,
+  PspVerifyResponseDto,
 } from './psp.schemas.js';
 
 @Injectable()
@@ -62,7 +63,7 @@ export class PspClient {
       );
     }
 
-    const parsed = pspCreatePaymentResponseSchema.safeParse(outcome.data);
+    const parsed = parseValidated(PspCreatePaymentResponseDto, outcome.data);
     if (!parsed.success) {
       throw new DomainException(
         HttpStatus.SERVICE_UNAVAILABLE,
@@ -105,7 +106,7 @@ export class PspClient {
       };
     }
 
-    const parsed = pspPaymentStatusSchema.safeParse(outcome.data);
+    const parsed = parseValidated(PspPaymentStatusDto, outcome.data);
     if (!parsed.success) {
       return {
         kind: 'AMBIGUOUS',
@@ -152,7 +153,7 @@ export class PspClient {
       };
     }
 
-    const parsed = pspVerifyResponseSchema.safeParse(outcome.data);
+    const parsed = parseValidated(PspVerifyResponseDto, outcome.data);
     if (!parsed.success) {
       return {
         kind: 'RETRYABLE_ERROR',
@@ -164,8 +165,8 @@ export class PspClient {
     const isVerified =
       code === 100 ||
       code === 101 ||
-      status === PspVerifyStatusValue.OK ||
-      status === PspVerifyStatusValue.ALREADY_VERIFIED;
+      status === PspVerifyStatusValueEnum.OK ||
+      status === PspVerifyStatusValueEnum.ALREADY_VERIFIED;
 
     if (isVerified) {
       const converted =
@@ -184,7 +185,7 @@ export class PspClient {
       };
     }
 
-    if (code === -51 || status === PspVerifyStatusValue.FAILED) {
+    if (code === -51 || status === PspVerifyStatusValueEnum.FAILED) {
       return {
         kind: 'FAILED',
         reason: message ?? 'PSP payment verification returned FAILED',

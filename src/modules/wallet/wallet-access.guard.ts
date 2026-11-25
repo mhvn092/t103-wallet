@@ -14,7 +14,7 @@ import { isRecord } from '../../common/filters/exception-response.util.js';
 import { matchesSecret } from '../../common/utils/secret-comparison.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { IDEMPOTENCY_ROUTE_META } from '../idempotency/idempotency.decorator.js';
-import type { IdempotencyRouteConfig } from '../idempotency/idempotency.types.js';
+import type { IdempotencyRouteConfigInterface } from '../idempotency/idempotency.interface.js';
 
 const AUTHENTICATED_USER = Symbol('wallet-authenticated-user');
 type WalletRequest = Request & { [AUTHENTICATED_USER]?: string };
@@ -58,10 +58,9 @@ export class WalletAccessGuard implements CanActivate {
       );
     }
 
-    const route = this._reflector.get<IdempotencyRouteConfig | undefined>(
-      IDEMPOTENCY_ROUTE_META,
-      context.getHandler(),
-    );
+    const route = this._reflector.get<
+      IdempotencyRouteConfigInterface | undefined
+    >(IDEMPOTENCY_ROUTE_META, context.getHandler());
     const body: unknown = req.body;
     const requestedUser = route?.userField
       ? this._bodyUserId(body, route.userField)

@@ -1,23 +1,62 @@
-import { z } from 'zod';
-import { PspStatusValue } from '../../common/enums/domain.enums.js';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+} from 'class-validator';
+import { PspStatusValueEnum } from '../../common/enums/provider.enums.js';
+import { IsStringOrNumber } from '../../common/utils/parse-validated.util.js';
 
-export const pspCreatePaymentResponseSchema = z.object({
-  token: z.string().min(1),
-  paymentUrl: z.string().min(1),
-  expiresAt: z.string().nullish(),
-});
+export class PspCreatePaymentResponseDto {
+  @IsString()
+  @IsNotEmpty()
+  token!: string;
 
-export const pspPaymentStatusSchema = z.object({
-  status: z.enum(PspStatusValue),
-  amount: z.union([z.string(), z.number()]).nullish(),
-  refId: z.string().nullish(),
-  orderId: z.string().nullish(),
-});
+  @IsString()
+  @IsNotEmpty()
+  paymentUrl!: string;
 
-export const pspVerifyResponseSchema = z.object({
-  code: z.number().nullish(),
-  status: z.string().nullish(),
-  amount: z.union([z.string(), z.number()]).nullish(),
-  refId: z.string().nullish(),
-  message: z.string().nullish(),
-});
+  @IsOptional()
+  @IsString()
+  expiresAt?: string | null;
+}
+
+export class PspPaymentStatusDto {
+  @IsEnum(PspStatusValueEnum)
+  status!: PspStatusValueEnum;
+
+  @IsOptional()
+  @IsStringOrNumber()
+  amount?: string | number | null;
+
+  @IsOptional()
+  @IsString()
+  refId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  orderId?: string | null;
+}
+
+export class PspVerifyResponseDto {
+  @IsOptional()
+  @IsNumber()
+  code?: number | null;
+
+  @IsOptional()
+  @IsString()
+  status?: string | null;
+
+  @IsOptional()
+  @IsStringOrNumber()
+  amount?: string | number | null;
+
+  @IsOptional()
+  @IsString()
+  refId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  message?: string | null;
+}

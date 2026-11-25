@@ -1,13 +1,13 @@
 import { HttpStatus } from '@nestjs/common';
-import { Currency } from '../../common/enums/domain.enums.js';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import { formatMinorToApi } from '../../common/utils/money.util.js';
 
 export function formatSignedIrtMinor(minor: bigint): string {
   return minor < 0n
-    ? `-${formatMinorToApi(-minor, Currency.IRT)}`
-    : formatMinorToApi(minor, Currency.IRT);
+    ? `-${formatMinorToApi(-minor, CurrencyEnum.IRT)}`
+    : formatMinorToApi(minor, CurrencyEnum.IRT);
 }
 
 export function assertValidCalendarDate(dateStr: string): string {

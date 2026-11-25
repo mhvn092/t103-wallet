@@ -1,14 +1,12 @@
 import {
-  PayoutStatusValue,
-  PspStatusValue,
-} from '../../common/enums/domain.enums.js';
-
-export { PayoutStatusValue, PspStatusValue };
+  PayoutStatusValueEnum,
+  PspStatusValueEnum,
+} from '../../common/enums/provider.enums.js';
 
 export type PspPaymentStatusResult =
   | {
       kind: 'FOUND';
-      status: PspStatusValue;
+      status: PspStatusValueEnum;
       amountIrt: bigint | null;
       refId: string | null;
       orderId?: string | null;
@@ -34,7 +32,7 @@ export type PayoutCreateResult =
 export type PayoutTransferStatusResult =
   | {
       kind: 'FOUND';
-      status: PayoutStatusValue;
+      status: PayoutStatusValueEnum;
       providerRefId: string | null;
       failureReason: string | null;
       amount?: string | number | null;

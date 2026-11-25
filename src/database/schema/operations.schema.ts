@@ -15,10 +15,8 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
-import {
-  DiscrepancyStatus,
-  OutboxStatus,
-} from '../../common/enums/domain.enums.js';
+import { DiscrepancyStatusEnum } from '../../common/enums/discrepancy.enums.js';
+import { OutboxStatusEnum } from '../../common/enums/outbox.enums.js';
 import {
   currencyEnum,
   depositStatusEnum,
@@ -29,7 +27,7 @@ import {
   outboxEventTypeEnum,
   outboxStatusEnum,
   withdrawalStatusEnum,
-} from './enums.js';
+} from './pg-enums.schema.js';
 
 function auditTimestamps() {
   return {
@@ -69,7 +67,9 @@ export const idempotencyKeys = pgTable(
 export const deposits = pgTable(
   'deposits',
   {
-    id: uuid('id').primaryKey(),
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`uuidv7()`),
     userId: text('user_id').notNull(),
     requestedAmount: numeric('requested_amount', {
       precision: 38,
@@ -107,7 +107,9 @@ export const deposits = pgTable(
 export const withdrawals = pgTable(
   'withdrawals',
   {
-    id: uuid('id').primaryKey(),
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`uuidv7()`),
     userId: text('user_id').notNull(),
     currency: currencyEnum('currency').notNull(),
     amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
@@ -150,7 +152,9 @@ export const withdrawals = pgTable(
 );
 
 export const adjustments = pgTable('adjustments', {
-  id: uuid('id').primaryKey(),
+  id: uuid('id')
+    .primaryKey()
+    .default(sql`uuidv7()`),
   userId: text('user_id').notNull(),
   currency: currencyEnum('currency').notNull(),
   amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
@@ -164,7 +168,9 @@ export const adjustments = pgTable('adjustments', {
 export const financialDiscrepancies = pgTable(
   'financial_discrepancies',
   {
-    id: uuid('id').primaryKey(),
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`uuidv7()`),
     referenceType: discrepancyRefTypeEnum('reference_type').notNull(),
     referenceId: uuid('reference_id').notNull(),
     userId: text('user_id').notNull(),
@@ -177,7 +183,7 @@ export const financialDiscrepancies = pgTable(
       .default({}),
     status: discrepancyStatusEnum('status')
       .notNull()
-      .default(DiscrepancyStatus.OPEN),
+      .default(DiscrepancyStatusEnum.OPEN),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -195,7 +201,9 @@ export const financialDiscrepancies = pgTable(
 );
 
 export const transfers = pgTable('transfers', {
-  id: uuid('id').primaryKey(),
+  id: uuid('id')
+    .primaryKey()
+    .default(sql`uuidv7()`),
   fromUserId: text('from_user_id').notNull(),
   toUserId: text('to_user_id').notNull(),
   currency: currencyEnum('currency').notNull(),
@@ -208,10 +216,14 @@ export const transfers = pgTable('transfers', {
 export const outboxEvents = pgTable(
   'outbox_events',
   {
-    id: uuid('id').primaryKey(),
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`uuidv7()`),
     eventType: outboxEventTypeEnum('event_type').notNull(),
     payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
-    status: outboxStatusEnum('status').notNull().default(OutboxStatus.PENDING),
+    status: outboxStatusEnum('status')
+      .notNull()
+      .default(OutboxStatusEnum.PENDING),
     retryCount: integer('retry_count').notNull().default(0),
     lastError: text('last_error'),
     leaseUntil: timestamp('lease_until', { withTimezone: true }),

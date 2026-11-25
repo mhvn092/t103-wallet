@@ -16,7 +16,7 @@ import {
 } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
-import { Currency } from '../src/common/enums/domain.enums.js';
+import { CurrencyEnum } from '../src/common/enums/currency.enum.js';
 import type { EnvConfig } from '../src/config/env.validation.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
@@ -84,7 +84,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '500000',
       idempotencyKey: `fund-${faker.string.uuid()}`,
     });
@@ -93,7 +93,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .post('/withdrawals')
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -105,7 +105,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: 'INVALID-IBAN',
       })
@@ -117,7 +117,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.USDT,
+        currency: CurrencyEnum.USDT,
         amount: '10',
         destination: 'TInvalidChecksum123',
       })
@@ -129,7 +129,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '99999',
         destination: VALID_IBAN,
       })
@@ -141,7 +141,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.USDT,
+        currency: CurrencyEnum.USDT,
         amount: '9.999999',
         destination: VALID_TRC20,
       })
@@ -153,7 +153,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '200000001',
         destination: VALID_IBAN,
       })
@@ -165,7 +165,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '500001',
         destination: VALID_IBAN,
       })
@@ -180,7 +180,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '500000',
       idempotencyKey: `fund-${faker.string.uuid()}`,
     });
@@ -190,7 +190,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-ok-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '250000',
         destination: VALID_IBAN,
       })
@@ -256,7 +256,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletRes.body.balances[0]).toEqual({
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       available: '250000',
       locked: '0',
       receivable: '0',
@@ -270,7 +270,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '800000',
       idempotencyKey: `fund-${faker.string.uuid()}`,
     });
@@ -281,7 +281,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-cancel-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '200000',
         destination: VALID_IBAN,
       })
@@ -312,7 +312,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-chaos-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '300000',
         destination: VALID_IBAN,
       })
@@ -411,7 +411,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '300000',
       idempotencyKey: `fund-${faker.string.uuid()}`,
     });
@@ -422,7 +422,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-amb1-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '200000',
         destination: VALID_IBAN,
       })
@@ -447,7 +447,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-spend-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '250000',
         destination: VALID_IBAN,
       })
@@ -523,7 +523,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletRes.body.balances[0]).toEqual({
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       available: '0',
       locked: '0',
       receivable: '150000',
@@ -582,7 +582,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '500000',
       idempotencyKey: `fund-after-freeze-${faker.string.uuid()}`,
     });
@@ -591,7 +591,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-blocked-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -606,7 +606,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.USDT,
+      currency: CurrencyEnum.USDT,
       amount: '25.5',
       idempotencyKey: `fund-usdt-${faker.string.uuid()}`,
     });
@@ -616,7 +616,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-usdt-ok-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.USDT,
+        currency: CurrencyEnum.USDT,
         amount: '10.5',
         destination: VALID_TRC20,
       })
@@ -628,7 +628,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletMid.body.balances[1]).toEqual({
-      currency: Currency.USDT,
+      currency: CurrencyEnum.USDT,
       available: '14',
       locked: '11.5',
       receivable: '0',
@@ -677,7 +677,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-usdt-fail-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.USDT,
+        currency: CurrencyEnum.USDT,
         amount: '10',
         destination: VALID_TRC20,
       })
@@ -697,7 +697,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletEnd.body.balances[1]).toEqual({
-      currency: Currency.USDT,
+      currency: CurrencyEnum.USDT,
       available: '14',
       locked: '0',
       receivable: '0',
@@ -719,7 +719,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '250000',
       idempotencyKey: `fund-f01-${faker.string.uuid()}`,
     });
@@ -730,7 +730,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-f01-cancel-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -778,7 +778,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-f01-ret-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -829,7 +829,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletRes.body.balances[0]).toEqual({
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       available: '250000',
       locked: '0',
       receivable: '0',
@@ -848,7 +848,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId: user1,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '100000',
       idempotencyKey: `fund-f02-${faker.string.uuid()}`,
     });
@@ -858,7 +858,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-f02-${faker.string.uuid()}`)
       .send({
         userId: user1,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -885,7 +885,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .send({
         fromUserId: user1,
         toUserId: user2,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
       })
       .expect(201);
@@ -928,7 +928,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${user1}`)
       .expect(200);
     expect(u1Wallet.body.balances[0]).toEqual({
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       available: '0',
       locked: '0',
       receivable: '0',
@@ -960,7 +960,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '400000',
       idempotencyKey: `fund-f11-${faker.string.uuid()}`,
     });
@@ -970,7 +970,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-f11-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '150000',
         destination: VALID_IBAN,
       })
@@ -1031,7 +1031,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       requestId: reqId,
       status: 'FAILED',
       amount: '100',
-      currency: Currency.USDT,
+      currency: CurrencyEnum.USDT,
       reason: 'CORRUPTED_WEBHOOK',
     });
     const mismatchFailAck = await request(app.getHttpServer())
@@ -1046,7 +1046,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletHeld.body.balances[0]).toEqual({
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       available: '250000',
       locked: '150000',
       receivable: '0',
@@ -1091,7 +1091,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       await fundUserViaAdjustment({
         app,
         userId: u,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '300000',
         idempotencyKey: `fund-irt-${u}-${faker.string.uuid()}`,
       });
@@ -1099,7 +1099,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId: userA,
-      currency: Currency.USDT,
+      currency: CurrencyEnum.USDT,
       amount: '30',
       idempotencyKey: `fund-usdt-${faker.string.uuid()}`,
     });
@@ -1111,7 +1111,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', sharedKey)
       .send({
         userId: userA,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '150000',
         destination: VALID_IBAN,
       })
@@ -1122,7 +1122,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', sharedKey)
       .send({
         userId: userB,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '150000',
         destination: VALID_IBAN,
       })
@@ -1154,7 +1154,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-paused-${faker.string.uuid()}`)
       .send({
         userId: userA,
-        currency: Currency.USDT,
+        currency: CurrencyEnum.USDT,
         amount: '10',
         destination: VALID_TRC20,
       })
@@ -1167,7 +1167,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-irt-ok-${faker.string.uuid()}`)
       .send({
         userId: userA,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -1185,7 +1185,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-resumed-${faker.string.uuid()}`)
       .send({
         userId: userA,
-        currency: Currency.USDT,
+        currency: CurrencyEnum.USDT,
         amount: '10',
         destination: VALID_TRC20,
       })
@@ -1210,7 +1210,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .send({
         fromUserId: userB,
         toUserId: userA,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '300000',
       })
       .expect(201);
@@ -1237,7 +1237,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId: userB,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '200000',
       idempotencyKey: `fund-b-repay-${faker.string.uuid()}`,
     });
@@ -1249,7 +1249,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .expect(200);
     expect(settleRes.body).toMatchObject({
       userId: userB,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       settledAmount: '150000',
       remainingReceivable: '0',
       outboundFrozen: false,
@@ -1263,7 +1263,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId: userB,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '100000',
       idempotencyKey: `fund-b-ok-${faker.string.uuid()}`,
     });
@@ -1272,7 +1272,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-b-after-${faker.string.uuid()}`)
       .send({
         userId: userB,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '150000',
         destination: VALID_IBAN,
       })
@@ -1286,7 +1286,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '300000',
       idempotencyKey: `fund-r01-${faker.string.uuid()}`,
     });
@@ -1297,7 +1297,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-r01-unaccepted-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -1397,7 +1397,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-r01-accepted-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -1444,7 +1444,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId: alice,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '200000',
       idempotencyKey: `fund-f01-oo-${faker.string.uuid()}`,
     });
@@ -1455,7 +1455,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-oo-1-${faker.string.uuid()}`)
       .send({
         userId: alice,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -1498,7 +1498,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-oo-2-${faker.string.uuid()}`)
       .send({
         userId: alice,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000',
         destination: VALID_IBAN,
       })
@@ -1532,7 +1532,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${alice}`)
       .expect(200);
     expect(walletRes.body.balances[0]).toEqual({
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       available: '200000',
       locked: '0',
       receivable: '0',
@@ -1550,7 +1550,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '500000',
       idempotencyKey: `fund-f01-halt-${faker.string.uuid()}`,
     });
@@ -1561,7 +1561,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
         .set('Idempotency-Key', `wd-f01-halt-${faker.string.uuid()}`)
         .send({
           userId,
-          currency: Currency.IRT,
+          currency: CurrencyEnum.IRT,
           amount: '100000',
           destination: VALID_IBAN,
         })
@@ -1622,7 +1622,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       providerRefId: 'REF-MISMATCH',
       failureReason: null,
       amount: '9999999',
-      currency: Currency.USDT,
+      currency: CurrencyEnum.USDT,
     });
     const resMismatch = await sendSignedSucceeded(
       wdMismatch.providerRequestId,
@@ -1737,7 +1737,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '400000000',
       idempotencyKey: `fund-f07-${faker.string.uuid()}`,
     });
@@ -1747,7 +1747,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-f07-1-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '150000000',
         destination: VALID_IBAN,
       })
@@ -1782,7 +1782,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-f07-over-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '100000000',
         destination: VALID_IBAN,
       })
@@ -1794,7 +1794,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-f07-ok-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '50000000',
         destination: VALID_IBAN,
       })
@@ -1808,7 +1808,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '500000',
       idempotencyKey: `fund-ops-res-${faker.string.uuid()}`,
     });
@@ -1818,7 +1818,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-ops-1-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '200000',
         destination: VALID_IBAN,
       })
@@ -1828,7 +1828,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .set('Idempotency-Key', `wd-ops-2-${faker.string.uuid()}`)
       .send({
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '150000',
         destination: VALID_IBAN,
       })
@@ -1895,7 +1895,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletEnd.body.balances[0]).toEqual({
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       available: '300000',
       locked: '0',
       receivable: '0',
@@ -1908,7 +1908,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     const key = faker.string.uuid();
     const payload = {
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '150000',
       destination: VALID_IBAN,
     };
@@ -1922,7 +1922,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '200000',
       idempotencyKey: faker.string.uuid(),
     });
@@ -1946,7 +1946,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       amount: '200000',
       idempotencyKey: faker.string.uuid(),
     });
@@ -1956,7 +1956,7 @@ describe('Withdrawal Lifecycle, Webhooks, Recovery & Ambiguity #1 (Integration)'
     try {
       const payload = {
         userId,
-        currency: Currency.IRT,
+        currency: CurrencyEnum.IRT,
         amount: '150000',
         destination: VALID_IBAN,
       };

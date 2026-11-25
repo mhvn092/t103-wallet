@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Currency } from '../../common/enums/domain.enums.js';
+import { CurrencyEnum } from '../../common/enums/currency.enum.js';
 import { MAX_AMOUNT_MINOR } from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { PayoutClient } from './payout.client.js';
@@ -26,7 +26,7 @@ describe('Payout create response classification', () => {
     );
     const outcome = await client.createTransfer({
       requestId: 'wd_test',
-      currency: Currency.IRT,
+      currency: CurrencyEnum.IRT,
       destination: 'IR062960000000100324200001',
       amountMinor: 150_000n,
     });

@@ -7,7 +7,6 @@ import {
   Param,
   Post,
   Req,
-  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -19,7 +18,7 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
 import { ApiErrorResponses } from '../../common/decorators/api-error-responses.decorator.js';
 import {
   IdempotencyRequestHash,
@@ -69,14 +68,12 @@ export class DepositController {
     @RequireIdempotencyKey() idempotencyKey: string,
     @IdempotencyRequestHash() requestHash: string | undefined,
     @Body() dto: DepositCreateDto,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<DepositCreateResponseDto> {
     const result = await this._depositService.initiateDeposit({
       idempotencyKey,
       requestHash,
       dto,
     });
-    res.status(result.statusCode);
     return result.body;
   }
 

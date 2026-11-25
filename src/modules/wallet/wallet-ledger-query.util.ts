@@ -1,6 +1,6 @@
-import { WalletAccountFilter } from '../../common/enums/domain.enums.js';
+import { WalletAccountFilterEnum } from '../../common/enums/account.enums.js';
 
-export const WALLET_ACCOUNT_FILTERS = Object.values(WalletAccountFilter);
+export const WALLET_ACCOUNT_FILTERS = Object.values(WalletAccountFilterEnum);
 
 export const MAX_PG_BIGINT = 9_223_372_036_854_775_807n;
 

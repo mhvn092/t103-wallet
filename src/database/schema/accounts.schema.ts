@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   date,
@@ -14,12 +15,14 @@ import {
   accountTypeEnum,
   currencyEnum,
   ledgerDirectionEnum,
-} from './enums.js';
+} from './pg-enums.schema.js';
 
 export const accounts = pgTable(
   'accounts',
   {
-    id: uuid('id').primaryKey(),
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`uuidv7()`),
     ownerType: accountOwnerTypeEnum('owner_type').notNull(),
     ownerId: text('owner_id').notNull(),
     currency: currencyEnum('currency').notNull(),

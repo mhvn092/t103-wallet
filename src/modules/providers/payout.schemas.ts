@@ -1,22 +1,52 @@
-import { z } from 'zod';
-import { PayoutStatusValue } from '../../common/enums/domain.enums.js';
+import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { PayoutStatusValueEnum } from '../../common/enums/provider.enums.js';
+import { IsStringOrNumber } from '../../common/utils/parse-validated.util.js';
 
-export const payoutAcceptedSchema = z.object({
-  trackingId: z.string().nullish(),
-  id: z.string().nullish(),
-});
+export class PayoutAcceptedDto {
+  @IsOptional()
+  @IsString()
+  trackingId?: string | null;
 
-export const payoutErrorSchema = z.object({
-  reason: z.string().nullish(),
-  error: z.string().nullish(),
-});
+  @IsOptional()
+  @IsString()
+  id?: string | null;
+}
 
-export const payoutInquirySchema = z.object({
-  status: z.enum(PayoutStatusValue),
-  trackingId: z.string().nullish(),
-  refId: z.string().nullish(),
-  reason: z.string().nullish(),
-  failureReason: z.string().nullish(),
-  amount: z.union([z.string(), z.number()]).nullish(),
-  currency: z.string().nullish(),
-});
+export class PayoutErrorDto {
+  @IsOptional()
+  @IsString()
+  reason?: string | null;
+
+  @IsOptional()
+  @IsString()
+  error?: string | null;
+}
+
+export class PayoutInquiryDto {
+  @IsEnum(PayoutStatusValueEnum)
+  status!: PayoutStatusValueEnum;
+
+  @IsOptional()
+  @IsString()
+  trackingId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  refId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  reason?: string | null;
+
+  @IsOptional()
+  @IsString()
+  failureReason?: string | null;
+
+  @IsOptional()
+  @IsStringOrNumber()
+  amount?: string | number | null;
+
+  @IsOptional()
+  @IsString()
+  currency?: string | null;
+}

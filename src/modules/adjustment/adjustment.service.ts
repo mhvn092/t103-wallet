@@ -1,20 +1,22 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
-  LedgerDirection,
-  LedgerRefType,
-  LedgerTxType,
-  SystemOwnerId,
-  UserAccountType,
-} from '../../common/enums/domain.enums.js';
+  LedgerDirectionEnum,
+  LedgerRefTypeEnum,
+  LedgerTxTypeEnum,
+} from '../../common/enums/ledger.enums.js';
+import {
+  SystemOwnerIdEnum,
+  UserAccountTypeEnum,
+} from '../../common/enums/account.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
   formatMinorToApi,
   parseAmountToMinor,
 } from '../../common/utils/money.util.js';
-import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
-import { adjustments } from '../../database/schema/index.js';
-import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
+import { v7 as generateUuidV7 } from 'uuid';
+import { adjustments } from '../../database/schema/operations.schema.js';
+import type { IdempotentExecutionResultInterface } from '../idempotency/idempotency.interface.js';
 import { userIdempotencyScope } from '../idempotency/idempotency.util.js';
 import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import { LedgerService } from '../ledger/ledger.service.js';
@@ -35,12 +37,12 @@ export class AdjustmentService {
     requestHash?: string;
     dto: AdjustmentCreateDto;
     operatorId: string;
-  }): Promise<IdempotentExecutionResult<AdjustmentResponseDto>> {
+  }): Promise<IdempotentExecutionResultInterface<AdjustmentResponseDto>> {
     const { dto } = params;
     const availableSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: UserAccountType.AVAILABLE,
+      accountType: UserAccountTypeEnum.AVAILABLE,
     };
 
     // Pre-ensure outside TX1 to avoid rollback bloat or XID deadlocks
@@ -66,7 +68,7 @@ export class AdjustmentService {
           );
           const opsAccount = await this._walletService.getSystemAccount(
             tx,
-            SystemOwnerId.OPS_ADJUSTMENT,
+            SystemOwnerIdEnum.OPS_ADJUSTMENT,
             dto.currency,
           );
 
@@ -92,8 +94,8 @@ export class AdjustmentService {
           }
 
           await this._ledgerService.postTransaction(tx, {
-            type: LedgerTxType.OPS_ADJ,
-            referenceType: LedgerRefType.ADJUSTMENT,
+            type: LedgerTxTypeEnum.OPS_ADJ,
+            referenceType: LedgerRefTypeEnum.ADJUSTMENT,
             referenceId: adjustmentId,
             description: `Manual ops adjustment: ${dto.reason}`,
             metadata: {
@@ -103,12 +105,12 @@ export class AdjustmentService {
             postings: [
               {
                 account: opsAccount,
-                direction: LedgerDirection.DEBIT,
+                direction: LedgerDirectionEnum.DEBIT,
                 amount: amountMinor,
               },
               {
                 account: userAvailable,
-                direction: LedgerDirection.CREDIT,
+                direction: LedgerDirectionEnum.CREDIT,
                 amount: amountMinor,
               },
             ],

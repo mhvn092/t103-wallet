@@ -1,7 +1,7 @@
 import type {
-  CsvDepositRecord,
-  ParsedSettlementCsv,
-} from './settlement-csv.types.js';
+  CsvDepositRecordInterface,
+  ParsedSettlementCsvInterface,
+} from './settlement-csv.interface.js';
 
 function toAsciiDigits(raw: string): string {
   let out = '';
@@ -67,7 +67,9 @@ function parseIrrInteger(raw: string): bigint | null {
   return BigInt(ascii);
 }
 
-export function parseSettlementCsv(csvText: string): ParsedSettlementCsv {
+export function parseSettlementCsv(
+  csvText: string,
+): ParsedSettlementCsvInterface {
   const cleaned = csvText.replace(/^\uFEFF/, '');
   const lines = cleaned
     .split(/\r?\n/)
@@ -79,7 +81,7 @@ export function parseSettlementCsv(csvText: string): ParsedSettlementCsv {
   }
 
   const seenKeys = new Set<string>();
-  const deposits: CsvDepositRecord[] = [];
+  const deposits: CsvDepositRecordInterface[] = [];
   let ignoredRowCount = 0;
   let duplicateCount = 0;
 
