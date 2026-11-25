@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { addPositiveJitterMs, computeSafeLeaseMs } from './backoff.util.js';
 import { sha256CanonicalJson } from './canonical-json.util.js';
 import { getTehranDateString } from './tehran-date.util.js';
-import { generateUuidV7 } from './uuidv7.util.js';
+import { generateUuidV7, uuidV7LowerBoundForMs } from './uuidv7.util.js';
 
 describe('core utilities (uuidv7, canonical-json, tehran-date)', () => {
   it('generates monotonic RFC-9562 UUIDv7 strings', () => {
@@ -20,6 +20,17 @@ describe('core utilities (uuidv7, canonical-json, tehran-date)', () => {
         ).toBe(true);
       }
     }
+  });
+
+  it('computes UUIDv7 lower-bound boundaries strictly separating past and current IDs', () => {
+    const nowId = generateUuidV7();
+    const futureBoundary = uuidV7LowerBoundForMs(Date.now() + 60_000);
+    const pastBoundary = uuidV7LowerBoundForMs(Date.now() - 60_000);
+    expect(futureBoundary).toMatch(
+      /^[\da-f]{8}-[\da-f]{4}-7000-8000-000000000000$/,
+    );
+    expect(nowId < futureBoundary).toBe(true);
+    expect(nowId > pastBoundary).toBe(true);
   });
 
   it('produces identical SHA-256 hashes regardless of object key order', () => {

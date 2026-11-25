@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PspStatusValue } from '../../common/enums/domain.enums.js';
 
 export const pspCreatePaymentResponseSchema = z.object({
   token: z.string().min(1),
@@ -7,7 +8,7 @@ export const pspCreatePaymentResponseSchema = z.object({
 });
 
 export const pspPaymentStatusSchema = z.object({
-  status: z.enum(['INIT', 'PAID', 'VERIFIED', 'FAILED', 'EXPIRED']),
+  status: z.enum(PspStatusValue),
   amount: z.union([z.string(), z.number()]).nullish(),
   refId: z.string().nullish(),
   orderId: z.string().nullish(),

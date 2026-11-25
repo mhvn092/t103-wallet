@@ -6,6 +6,7 @@ import type { App } from 'supertest/types.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+import { Currency } from '../src/common/enums/domain.enums.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
 import {
@@ -54,14 +55,14 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
     await fundUserViaAdjustment({
       app,
       userId: alice,
-      currency: 'IRT',
+      currency: Currency.IRT,
       amount: '500000',
       idempotencyKey: `fund-irt-${faker.string.uuid()}`,
     });
     await fundUserViaAdjustment({
       app,
       userId: alice,
-      currency: 'USDT',
+      currency: Currency.USDT,
       amount: '15.25',
       idempotencyKey: `fund-usdt-${faker.string.uuid()}`,
     });
@@ -73,7 +74,7 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
       .send({
         fromUserId: alice,
         toUserId: alice,
-        currency: 'IRT',
+        currency: Currency.IRT,
         amount: '10000',
       })
       .expect(400);
@@ -86,7 +87,7 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
       .send({
         fromUserId: alice,
         toUserId: bob,
-        currency: 'USDT',
+        currency: Currency.USDT,
         amount: '20',
       })
       .expect(422);
@@ -97,7 +98,7 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
     const payload = {
       fromUserId: alice,
       toUserId: bob,
-      currency: 'USDT',
+      currency: Currency.USDT,
       amount: '5.125',
     };
     const xfer1 = await request(app.getHttpServer())
@@ -130,7 +131,7 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
       .send({
         fromUserId: alice,
         toUserId: bob,
-        currency: 'IRT',
+        currency: Currency.IRT,
         amount: '10000',
       })
       .expect(403);
@@ -143,7 +144,7 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
       .send({
         fromUserId: bob,
         toUserId: alice,
-        currency: 'USDT',
+        currency: Currency.USDT,
         amount: '1',
       })
       .expect(201);
@@ -169,7 +170,7 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
       .send({
         fromUserId: bob,
         toUserId: alice,
-        currency: 'IRT',
+        currency: Currency.IRT,
         amount: '1'.padEnd(41, '0'),
       })
       .expect(400);
@@ -194,14 +195,14 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
     await fundUserViaAdjustment({
       app,
       userId: alice,
-      currency: 'IRT',
+      currency: Currency.IRT,
       amount: '5000000',
       idempotencyKey: `fund-a-${faker.string.uuid()}`,
     });
     await fundUserViaAdjustment({
       app,
       userId: bob,
-      currency: 'IRT',
+      currency: Currency.IRT,
       amount: '5000000',
       idempotencyKey: `fund-b-${faker.string.uuid()}`,
     });
@@ -221,7 +222,7 @@ describe('Internal P2P Transfers & Deadlock-Free Locking (Integration)', () => {
         body: JSON.stringify({
           fromUserId,
           toUserId,
-          currency: 'IRT',
+          currency: Currency.IRT,
           amount,
         }),
       });

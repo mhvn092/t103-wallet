@@ -1,6 +1,6 @@
 import type { ConfigService } from '@nestjs/config';
+import { Currency } from '../../common/enums/domain.enums.js';
 import {
-  type Currency,
   convertUsdtToIrtCeiling,
   formatMinorToApi,
   parseAmountToMinor,
@@ -20,9 +20,9 @@ export function computeWithdrawalPolicyAmounts(
 ): WithdrawalPolicyAmounts {
   const dailyLimitIrt = parseAmountToMinor(
     configService.get('DAILY_LIMIT_IRT', { infer: true }),
-    'IRT',
+    Currency.IRT,
   );
-  if (currency === 'IRT') {
+  if (currency === Currency.IRT) {
     return {
       feeMinor: 0n,
       fxRateIrt: 1n,
@@ -33,12 +33,12 @@ export function computeWithdrawalPolicyAmounts(
 
   const feeMinor = parseAmountToMinor(
     configService.get('USDT_WITHDRAWAL_FEE', { infer: true }),
-    'USDT',
+    Currency.USDT,
     { allowZero: true },
   );
   const fxRateIrt = parseAmountToMinor(
     configService.get('USDT_IRT_RATE', { infer: true }),
-    'IRT',
+    Currency.IRT,
   );
   return {
     feeMinor,
@@ -56,10 +56,11 @@ export function isWebhookAmountValid(
 ): boolean {
   const normCcy = providedCurrency?.trim().toUpperCase();
   try {
-    if (expectedCurrency === 'IRT') {
-      if (normCcy === 'IRT') {
+    if (expectedCurrency === Currency.IRT) {
+      if (normCcy === Currency.IRT) {
         return (
-          parseAmountToMinor(String(providedAmount), 'IRT') === expectedMinor
+          parseAmountToMinor(String(providedAmount), Currency.IRT) ===
+          expectedMinor
         );
       }
       const parsedIrr = parseIrrToIrt(providedAmount);
@@ -69,7 +70,10 @@ export function isWebhookAmountValid(
         parsedIrr.amountIrt === expectedMinor
       );
     }
-    return parseAmountToMinor(String(providedAmount), 'USDT') === expectedMinor;
+    return (
+      parseAmountToMinor(String(providedAmount), Currency.USDT) ===
+      expectedMinor
+    );
   } catch {
     return false;
   }
@@ -78,13 +82,12 @@ export function isWebhookAmountValid(
 export function toWithdrawalResponseDto(
   row: WithdrawalEntity,
 ): WithdrawalResponseDto {
-  const ccy: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
   return {
     withdrawalId: row.id,
     userId: row.userId,
-    currency: ccy,
-    amount: formatMinorToApi(BigInt(row.amount), ccy),
-    fee: formatMinorToApi(BigInt(row.fee), ccy),
+    currency: row.currency,
+    amount: formatMinorToApi(BigInt(row.amount), row.currency),
+    fee: formatMinorToApi(BigInt(row.fee), row.currency),
     status: row.status,
     destination: row.destination,
     providerRequestId: row.providerRequestId,

@@ -1,9 +1,9 @@
 import { HttpStatus } from '@nestjs/common';
+import { CURRENCIES, Currency } from '../enums/domain.enums.js';
 import { DomainException } from '../errors/domain.exception.js';
 import { ErrorCode } from '../errors/error-codes.js';
 
-export const CURRENCIES = ['IRT', 'USDT'] as const;
-export type Currency = (typeof CURRENCIES)[number];
+export { CURRENCIES, Currency };
 
 const USDT_SCALE = 6;
 export const USDT_MINOR_PER_UNIT = 1_000_000n;

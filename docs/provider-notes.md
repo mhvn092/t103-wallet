@@ -3,11 +3,18 @@
 **Probed Image:** `hamtapay/t103-simulator:1.0` | **Modes Tested:** `SIM_CHAOS=default` & `SIM_CHAOS=hostile` (`SIM_TIME_SCALE=10` and `20`)  
 **Method:** Strictly black-box HTTP probes + raw local webhook capture server (`X-Signature` HMAC-SHA256 verified against exact raw body bytes).
 
+**Simple Intuition:**
+External payment gateways and bank payout providers don't behave cleanly: they mix currencies, lie or fail ambiguously under load, send duplicate or out-of-order webhooks, spoof signatures in hostile tests, and export messy Persian spreadsheets. Instead of guessing how the simulator works, we probed it directly in both normal and hostile modes and built defensive guardrails around every real quirk we observed.
+
 ---
 
 ## 1. Critical Empirical Discoveries & Design Changes
 
 ### Finding #1 — PSP Currency Unit Is **Rial (`IRR`)**, Not Toman (`IRT`) *(Critical)*
+
+**Simple Intuition:**
+Our wallet speaks Toman (`IRT`), while both the PSP and Payout APIs expect Rials (`IRR`, 10x Toman). Keep all internal accounting in Tomans and convert `× 10` / `÷ 10` strictly at the provider HTTP boundary (flagging any non-multiple-of-10 response as a discrepancy).
+
 - **Observation:** Calling `POST /psp/payments` with `amount: 150000` causes `GET /psp/pay/{token}` to display:
   ```json
   {
@@ -24,6 +31,10 @@
 ---
 
 ### Finding #2 — `POST /psp/verify` Returns `status: "FAILED" (code: -51)` on **Unpaid `INIT`** Deposits!
+
+**Simple Intuition:**
+Never call `/psp/verify` blindly on a deposit that hasn't been paid yet, because the PSP responds with the exact same `FAILED` code as a genuinely failed payment. Check `GET /psp/payments/{token}` first, treat `503` errors as transient retries, and only fail a deposit if the PSP explicitly reports `FAILED` or its expiry window passes.
+
 - **Observation (`default` mode):**
   - On a freshly paid token (`POST /psp/pay/{token}` `{"result":"success"}`):
     ```json
@@ -54,12 +65,20 @@
 ---
 
 ### Finding #3 — `POST /psp/payments` `orderId` Is **Not** Idempotent on Simulator
+
+**Simple Intuition:**
+Calling `POST /psp/payments` twice with the same `orderId` creates two different payment tokens on the PSP side. So save the returned token to our database before returning `201`, and if an attempt crashes before saving a token, just let that unused `INITIATED` row expire safely rather than blindly creating a second token.
+
 - **Observation:** Two `POST /psp/payments` calls with identical `orderId: "probe-dup-ord-..."` returned `201` with **two different tokens** (`A064c620396ecacf32` and `A0d69acfdcf6ec9c2b`).
 - **Design Change (`design.md v1.1`):** `POST /deposits` persists `psp_token` before returning `201`. An orphaned `INITIATED` row (`psp_token IS NULL`) past its 60s lease was never exposed to a user and expires safely to `FAILED` without re-calling `POST /psp/payments`.
 
 ---
 
 ### Finding #4 — Payout `503` & Socket Resets Can Still `SUCCEED` After Returning `404`! *(Critical)*
+
+**Simple Intuition:**
+In hostile mode, an outbound payout can return `503` or drop the socket, then return `404 NOT_FOUND` on an immediate status check, and *still* succeed a second later. So never mark a payout failed on network errors, `503`s, or `404`s—instead, check `GET`, and if it's still `404`, safely retry `POST` using the exact same `provider_request_id` so the provider's own idempotency deduplicates it.
+
 - **Observation (`SIM_CHAOS=hostile`, `SIM_TIME_SCALE=20`):**
   - `POST /payout/transfers` (`requestId: "h2-wd-...-15"`) failed client-side with **`TypeError: fetch failed`**. Immediate `GET /payout/transfers/{requestId}` returned **`404 { "error": "NOT_FOUND" }`** — and **~1.5s later flipped to `200 { "status": "SUCCEEDED" }`**!
   - `POST /payout/transfers` (`requestId: "h2-wd-...-17"`) returned **`503 { "error": "UPSTREAM_UNAVAILABLE" }`**. Immediate `GET /payout/transfers/{requestId}` returned **`404 NOT_FOUND`** — and **later flipped to `200 SUCCEEDED`**!
@@ -72,6 +91,10 @@
 ---
 
 ### Finding #5 — Out-of-Order Stale Webhooks & Spoofed Invalid-HMAC `FAILED` Webhooks
+
+**Simple Intuition:**
+Webhooks arrive late, duplicated, out of order, and sometimes forged. Always verify the HMAC signature on raw bytes before parsing or trusting anything, and only allow withdrawal states to move forward so a late `PROCESSING` webhook can never roll back a `SUCCEEDED` payout.
+
 - **Observation:**
   - **Raw Payout Webhook Format (`default` & `hostile`):**
     ```text
@@ -94,6 +117,10 @@
 ---
 
 ### Finding #6 — Settlement CSV Format & Dirty Data (`GET /psp/settlement?date=YYYY-MM-DD`)
+
+**Simple Intuition:**
+The PSP settlement CSV is a messy real-world Persian bank export: Persian digits and separators, zero-padded reference IDs, duplicate rows, and mixed transaction types (deposits, payouts, fees, and unknown payments). Clean and normalize the fields first, deduplicate repeated rows, filter to deposit lines (`واریز درگاه`), convert Rials to Tomans, and then reconcile against our database.
+
 - **Observation (`SIM_CHAOS=hostile` sample):**
   ```csv
   ردیف,تاریخ,شماره پیگیری,نوع تراکنش,مبلغ (ریال),شرح

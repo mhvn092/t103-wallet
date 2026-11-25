@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { WithdrawalStatus } from '../../../common/enums/domain.enums.js';
 import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
 
 export class WithdrawalResponseDto {
@@ -18,16 +19,9 @@ export class WithdrawalResponseDto {
   fee!: string;
 
   @ApiProperty({
-    enum: [
-      'PENDING_DISPATCH',
-      'DISPATCHING',
-      'PROCESSING',
-      'SUCCEEDED',
-      'FAILED',
-      'MANUAL_REVIEW',
-    ],
+    enum: WithdrawalStatus,
   })
-  status!: string;
+  status!: WithdrawalStatus;
 
   @ApiProperty({ example: 'IR062960000000100324200001' })
   destination!: string;
@@ -58,6 +52,10 @@ export class WithdrawalWebhookAckDto {
   @ApiProperty({ format: 'uuid', required: false })
   withdrawalId?: string;
 
-  @ApiProperty({ example: 'SUCCEEDED', required: false })
-  status?: string;
+  @ApiProperty({
+    enum: WithdrawalStatus,
+    example: WithdrawalStatus.SUCCEEDED,
+    required: false,
+  })
+  status?: WithdrawalStatus;
 }

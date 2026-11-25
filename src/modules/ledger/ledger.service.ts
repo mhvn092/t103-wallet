@@ -1,10 +1,14 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import {
+  AccountOwnerType,
+  Currency,
+  LedgerDirection,
+  OutboxEventType,
+  OutboxStatus,
+} from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
-import {
-  type Currency,
-  formatMinorToApi,
-} from '../../common/utils/money.util.js';
+import { formatMinorToApi } from '../../common/utils/money.util.js';
 import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import type { DbTransaction } from '../../database/database.types.js';
 import {
@@ -13,7 +17,6 @@ import {
   outboxEvents,
 } from '../../database/schema/index.js';
 import type {
-  LedgerDirection,
   LedgerPostingLine,
   PostLedgerTxInput,
   PostLedgerTxResult,
@@ -24,8 +27,7 @@ export class LedgerService {
   /**
    * Inserts an immutable double-entry ledger transaction and its posting lines.
    * PostgreSQL's BEFORE INSERT trigger on ledger_items projects USER account balances
-   * and populates balance_after; the DEFERRABLE constraint trigger on ledger_transactions
-   * enforces per-currency SUM(DEBIT) == SUM(CREDIT) at COMMIT.
+   * and populates balance_after atomically with the insert.
    *
    * Also emits a transactional BALANCE_CHANGED outbox event in the same TX whenever any
    * USER account is touched.
@@ -53,7 +55,9 @@ export class LedgerService {
           transactionId: txId,
           accountId: line.account.id,
           userId:
-            line.account.ownerType === 'USER' ? line.account.ownerId : null,
+            line.account.ownerType === AccountOwnerType.USER
+              ? line.account.ownerId
+              : null,
           accountType: line.account.accountType,
           currency: line.account.currency,
           direction: line.direction,
@@ -68,16 +72,15 @@ export class LedgerService {
       if (item.userId === null) {
         continue;
       }
-      const ccy: Currency = item.currency === 'USDT' ? 'USDT' : 'IRT';
       userChanges.push({
         userId: item.userId,
-        currency: ccy,
+        currency: item.currency,
         accountType: item.accountType,
         direction: item.direction,
-        amount: formatMinorToApi(BigInt(item.amount), ccy),
+        amount: formatMinorToApi(BigInt(item.amount), item.currency),
         balanceAfter:
           item.balanceAfter !== null
-            ? formatMinorToApi(BigInt(item.balanceAfter), ccy)
+            ? formatMinorToApi(BigInt(item.balanceAfter), item.currency)
             : null,
       });
     }
@@ -85,7 +88,7 @@ export class LedgerService {
     if (userChanges.length > 0) {
       await tx.insert(outboxEvents).values({
         id: generateUuidV7(),
-        eventType: 'BALANCE_CHANGED',
+        eventType: OutboxEventType.BALANCE_CHANGED,
         payload: {
           transactionId: txId,
           transactionType: input.type,
@@ -94,7 +97,7 @@ export class LedgerService {
           changes: userChanges,
           occurredAt: new Date().toISOString(),
         },
-        status: 'PENDING',
+        status: OutboxStatus.PENDING,
       });
     }
 
@@ -104,9 +107,9 @@ export class LedgerService {
         id: row.id,
         accountId: row.accountId,
         userId: row.userId,
-        currency: row.currency === 'USDT' ? 'USDT' : 'IRT',
+        currency: row.currency,
         accountType: row.accountType,
-        direction: this._parseDirection(row.direction),
+        direction: row.direction,
         amount: BigInt(row.amount),
         balanceAfter:
           row.balanceAfter !== null ? BigInt(row.balanceAfter) : null,
@@ -132,14 +135,16 @@ export class LedgerService {
           'Ledger posting amount must be positive',
         );
       }
-      const ccy: Currency = line.account.currency === 'USDT' ? 'USDT' : 'IRT';
-      const accTotals = totals.get(ccy) ?? { debit: 0n, credit: 0n };
-      if (line.direction === 'DEBIT') {
+      const accTotals = totals.get(line.account.currency) ?? {
+        debit: 0n,
+        credit: 0n,
+      };
+      if (line.direction === LedgerDirection.DEBIT) {
         accTotals.debit += line.amount;
       } else {
         accTotals.credit += line.amount;
       }
-      totals.set(ccy, accTotals);
+      totals.set(line.account.currency, accTotals);
     }
 
     for (const [ccy, sum] of totals.entries()) {
@@ -151,9 +156,5 @@ export class LedgerService {
         );
       }
     }
-  }
-
-  private _parseDirection(raw: string): LedgerDirection {
-    return raw === 'DEBIT' ? 'DEBIT' : 'CREDIT';
   }
 }

@@ -1,5 +1,6 @@
 import * as fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { Currency } from '../enums/domain.enums.js';
 import {
   assertValidDestination,
   isValidIranianIban,
@@ -58,13 +59,13 @@ describe('destination-validator', () => {
   });
 
   it('throws DomainException INVALID_DESTINATION on invalid destinations', () => {
-    expect(assertValidDestination('ir062960000000100324200001', 'IRT')).toBe(
-      'IR062960000000100324200001',
-    );
-    expect(() => assertValidDestination('IR00000', 'IRT')).toThrow(
+    expect(
+      assertValidDestination('ir062960000000100324200001', Currency.IRT),
+    ).toBe('IR062960000000100324200001');
+    expect(() => assertValidDestination('IR00000', Currency.IRT)).toThrow(
       /Iranian IBAN/,
     );
-    expect(() => assertValidDestination('TBadAddress', 'USDT')).toThrow(
+    expect(() => assertValidDestination('TBadAddress', Currency.USDT)).toThrow(
       /TRC20/,
     );
   });

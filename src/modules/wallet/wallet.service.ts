@@ -1,5 +1,12 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, like, lt, or, sql } from 'drizzle-orm';
+import {
+  AccountOwnerType,
+  AccountType,
+  DiscrepancyStatus,
+  DiscrepancyType,
+  WalletAccountFilter,
+} from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -28,7 +35,8 @@ import {
   type AccountSpec,
   type SystemOwnerId,
   USER_ACCOUNT_NORMAL_SIDE,
-  type UserAccountType,
+  USER_TO_ACCOUNT_TYPE,
+  UserAccountType,
   type WalletBalanceView,
 } from './wallet.types.js';
 
@@ -99,13 +107,16 @@ export class WalletService {
       .from(accounts)
       .where(
         and(
-          eq(accounts.ownerType, 'USER'),
+          eq(accounts.ownerType, AccountOwnerType.USER),
           or(
             ...sortedSpecs.map((spec) =>
               and(
                 eq(accounts.ownerId, spec.userId),
                 eq(accounts.currency, spec.currency),
-                eq(accounts.accountType, spec.accountType),
+                eq(
+                  accounts.accountType,
+                  USER_TO_ACCOUNT_TYPE[spec.accountType],
+                ),
               ),
             ),
           ),
@@ -154,7 +165,7 @@ export class WalletService {
       .from(accounts)
       .where(
         and(
-          eq(accounts.ownerType, 'SYSTEM'),
+          eq(accounts.ownerType, AccountOwnerType.SYSTEM),
           eq(accounts.ownerId, ownerId),
           eq(accounts.currency, currency),
         ),
@@ -179,7 +190,12 @@ export class WalletService {
         balance: accounts.balance,
       })
       .from(accounts)
-      .where(and(eq(accounts.ownerType, 'USER'), eq(accounts.ownerId, userId)));
+      .where(
+        and(
+          eq(accounts.ownerType, AccountOwnerType.USER),
+          eq(accounts.ownerId, userId),
+        ),
+      );
 
     const byKey = new Map<string, bigint>();
     for (const row of rows) {
@@ -192,12 +208,15 @@ export class WalletService {
     const balances: WalletBalanceView[] = CURRENCIES.map((currency) => ({
       currency,
       available: formatMinorToApi(
-        byKey.get(`${currency}|AVAILABLE`) ?? 0n,
+        byKey.get(`${currency}|${AccountType.AVAILABLE}`) ?? 0n,
         currency,
       ),
-      locked: formatMinorToApi(byKey.get(`${currency}|LOCKED`) ?? 0n, currency),
+      locked: formatMinorToApi(
+        byKey.get(`${currency}|${AccountType.LOCKED}`) ?? 0n,
+        currency,
+      ),
       receivable: formatMinorToApi(
-        byKey.get(`${currency}|RECEIVABLE`) ?? 0n,
+        byKey.get(`${currency}|${AccountType.RECEIVABLE}`) ?? 0n,
         currency,
       ),
     }));
@@ -209,14 +228,19 @@ export class WalletService {
     userId: string;
     limit: number;
     cursor?: bigint;
-    accountType?: UserAccountType | 'ALL';
+    accountType?: WalletAccountFilter;
     currency?: Currency;
   }): Promise<WalletLedgerResponseDto> {
-    const accountFilter = params.accountType ?? 'ALL';
+    const accountFilter = params.accountType ?? WalletAccountFilter.ALL;
     const conditions = [eq(ledgerItems.userId, params.userId)];
 
-    if (accountFilter !== 'ALL') {
-      conditions.push(eq(ledgerItems.accountType, accountFilter));
+    if (accountFilter !== WalletAccountFilter.ALL) {
+      conditions.push(
+        eq(
+          ledgerItems.accountType,
+          USER_TO_ACCOUNT_TYPE[accountFilter as unknown as UserAccountType],
+        ),
+      );
     }
     if (params.currency) {
       conditions.push(eq(ledgerItems.currency, params.currency));
@@ -254,26 +278,23 @@ export class WalletService {
     const lastItem = pageRows[pageRows.length - 1];
 
     return {
-      items: pageRows.map((row) => {
-        const ccy: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
-        return {
-          id: row.id.toString(),
-          transactionId: row.transactionId,
-          type: row.type,
-          currency: ccy,
-          accountType: row.accountType,
-          direction: row.direction,
-          amount: formatMinorToApi(BigInt(row.amount), ccy),
-          balanceAfter:
-            row.balanceAfter !== null
-              ? formatMinorToApi(BigInt(row.balanceAfter), ccy)
-              : null,
-          referenceType: row.referenceType,
-          referenceId: row.referenceId,
-          description: row.description,
-          createdAt: row.createdAt.toISOString(),
-        };
-      }),
+      items: pageRows.map((row) => ({
+        id: row.id.toString(),
+        transactionId: row.transactionId,
+        type: row.type,
+        currency: row.currency,
+        accountType: row.accountType,
+        direction: row.direction,
+        amount: formatMinorToApi(BigInt(row.amount), row.currency),
+        balanceAfter:
+          row.balanceAfter !== null
+            ? formatMinorToApi(BigInt(row.balanceAfter), row.currency)
+            : null,
+        referenceType: row.referenceType,
+        referenceId: row.referenceId,
+        description: row.description,
+        createdAt: row.createdAt.toISOString(),
+      })),
       nextCursor: hasMore && lastItem ? lastItem.id.toString() : null,
     };
   }
@@ -300,13 +321,16 @@ export class WalletService {
   ): Promise<boolean> {
     await tx
       .update(financialDiscrepancies)
-      .set({ status: 'RESOLVED' })
+      .set({ status: DiscrepancyStatus.RESOLVED })
       .where(
         and(
           eq(financialDiscrepancies.userId, userId),
           eq(financialDiscrepancies.currency, currency),
-          eq(financialDiscrepancies.discrepancyType, 'LATE_SUCCESS_CONFLICT'),
-          eq(financialDiscrepancies.status, 'OPEN'),
+          eq(
+            financialDiscrepancies.discrepancyType,
+            DiscrepancyType.LATE_SUCCESS_CONFLICT,
+          ),
+          eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN),
         ),
       );
 
@@ -377,7 +401,10 @@ export class WalletService {
       })
       .from(accounts)
       .where(
-        and(eq(accounts.ownerType, 'USER'), inArray(accounts.ownerId, userIds)),
+        and(
+          eq(accounts.ownerType, AccountOwnerType.USER),
+          inArray(accounts.ownerId, userIds),
+        ),
       );
 
     const existingKeys = new Set(
@@ -393,10 +420,10 @@ export class WalletService {
         .values(
           missing.map((spec) => ({
             id: generateUuidV7(),
-            ownerType: 'USER',
+            ownerType: AccountOwnerType.USER,
             ownerId: spec.userId,
             currency: spec.currency,
-            accountType: spec.accountType,
+            accountType: USER_TO_ACCOUNT_TYPE[spec.accountType],
             normalSide: USER_ACCOUNT_NORMAL_SIDE[spec.accountType],
             balance: '0',
           })),

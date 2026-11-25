@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, isNull, sql } from 'drizzle-orm';
+import {
+  Currency,
+  ReconciliationAdjacentMatchType,
+  ReconciliationMismatchType,
+} from '../../common/enums/domain.enums.js';
 import { formatMinorToApi } from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import { DatabaseService } from '../../database/database.service.js';
@@ -215,11 +220,11 @@ export class ReconciliationService {
       const localIrt = match ? BigInt(match.verifiedAmount ?? '0') : null;
       return {
         mismatch: {
-          type: 'AMOUNT_MISMATCH',
+          type: ReconciliationMismatchType.AMOUNT_MISMATCH,
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount:
-            localIrt !== null ? formatMinorToApi(localIrt, 'IRT') : null,
+            localIrt !== null ? formatMinorToApi(localIrt, Currency.IRT) : null,
           depositId: match?.id ?? null,
           details: 'PSP settlement CSV deposit row has non-positive IRR amount',
         },
@@ -229,7 +234,7 @@ export class ReconciliationService {
     if (!match) {
       return {
         mismatch: {
-          type: 'MISSING_IN_LOCAL',
+          type: ReconciliationMismatchType.MISSING_IN_LOCAL,
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount: null,
@@ -246,10 +251,10 @@ export class ReconciliationService {
     if (csvRow.hasIrrRemainder || csvRow.amountIrt !== localIrt) {
       return {
         mismatch: {
-          type: 'AMOUNT_MISMATCH',
+          type: ReconciliationMismatchType.AMOUNT_MISMATCH,
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
-          localAmount: formatMinorToApi(localIrt, 'IRT'),
+          localAmount: formatMinorToApi(localIrt, Currency.IRT),
           depositId: match.id,
           details: csvRow.hasIrrRemainder
             ? 'PSP settlement CSV IRR amount is not an exact multiple of 10'
@@ -259,11 +264,11 @@ export class ReconciliationService {
     }
 
     if (!localForDateIds.has(match.id)) {
-      const formattedAmount = formatMinorToApi(localIrt, 'IRT');
+      const formattedAmount = formatMinorToApi(localIrt, Currency.IRT);
       return {
         matchedDepositId: match.id,
         adjacentMatch: {
-          type: 'MATCHED_ADJACENT_DAY',
+          type: ReconciliationAdjacentMatchType.MATCHED_ADJACENT_DAY,
           reference: csvRow.normalizedReference,
           csvAmount: formatSignedIrtMinor(csvRow.amountIrt),
           localAmount: formattedAmount,
@@ -292,10 +297,10 @@ export class ReconciliationService {
     const localIrt =
       local.verifiedAmount !== null ? BigInt(local.verifiedAmount) : 0n;
     return {
-      type: 'MISSING_IN_CSV',
+      type: ReconciliationMismatchType.MISSING_IN_CSV,
       reference: normRef || local.id,
       csvAmount: null,
-      localAmount: formatMinorToApi(localIrt, 'IRT'),
+      localAmount: formatMinorToApi(localIrt, Currency.IRT),
       depositId: local.id,
       details:
         'Local SUCCEEDED deposit on target date not found in PSP settlement CSV',

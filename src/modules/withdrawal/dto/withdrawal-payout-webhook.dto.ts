@@ -1,21 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PayoutStatusValue } from '../../../common/enums/domain.enums.js';
 
 export class WithdrawalPayoutWebhookDto {
   @ApiProperty({ example: 'wd_019abc...' })
   requestId!: string;
 
   @ApiProperty({
-    enum: [
-      'PENDING',
-      'PROCESSING',
-      'SUCCEEDED',
-      'FAILED',
-      'RETURNED',
-      'REVERSED',
-    ],
-    example: 'SUCCEEDED',
+    enum: PayoutStatusValue,
+    example: PayoutStatusValue.SUCCEEDED,
   })
-  status!: string;
+  status!: PayoutStatusValue;
 
   @ApiPropertyOptional({ example: 'TRK123456' })
   trackingId?: string;

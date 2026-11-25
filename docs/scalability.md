@@ -2,12 +2,17 @@
 
 **Scenario (T-103 Bonus Analysis):** Traffic scales `50×` to **`500` withdrawals/sec**, **`2,000,000` user wallets** (~6–8M rows in `accounts`), and **one corporate wallet submitting `200` withdrawals/sec** continuously. *(Analysis only; no implementation required.)*
 
+**Simple Intuition:**
+Scaling a ledger 50x does not mean splitting it into microservices—that actually makes row locking slower. Normal users (`300/s` across 2 million wallets) never collide with each other. The real wall is one hot corporate wallet hitting the exact same balance and daily-limit rows `200` times per second, followed by ledger table growth and slow outbound bank HTTP calls tying up API workers.
+
 ---
 
 ## 1. Architectural Premise: Why Modular Monolith Scales Better Than Microservices
 
-A common reflex at 50x scale is splitting `Wallet`, `Ledger`, `DailyLimit`, and `Withdrawal` into separate microservices. For a double-entry financial core, that makes scalability **worse**, not better:
+**Simple Intuition:**
+A single withdrawal needs to check the daily limit, check freezes, lock the balance, and write the ledger + outbox together. If you split those into separate microservices, one fast local DB transaction turns into slow network calls and distributed sagas—making hot accounts lock *longer* and fail partially. Keep one transactional boundary in a Modular Monolith and scale stateless app/worker pods around it.
 
+**Technical Details:**
 - **The Distributed Transaction Nightmare (`2PC` / Sagas):** Checking `user_daily_limits`, enforcing `outbound_frozen`, locking `AVAILABLE → LOCKED`, and writing balanced `ledger_items` + `outbox_events` currently takes **one ~2ms local PostgreSQL ACID transaction**. Splitting these across microservice boundaries turns one local lock into 4+ cross-network RPCs plus distributed `2PC` or Saga compensating transactions—multiplying tail latency (`P99`), lengthening lock hold times (which *reduces* max TPS on hot accounts), and introducing split-brain partial-failure windows.
 - **Scalability Comes from Storage Partitioning & Lock Elimination, Not Network Boundaries:** Large-scale commerce and ledger platforms prove this in practice. **Shopify's core platform** handles massive Black Friday / Cyber Monday (BFCM) throughput as a **Modular Monolith**—scaling stateless compute horizontally and partitioning data rather than paying microservice RPC overhead inside ACID invariants.
 
@@ -16,6 +21,9 @@ Our **NestJS Modular Monolith** keeps strict module boundaries in code while run
 ---
 
 ## 2. Capacity Math & Where the First Bottleneck Hits
+
+**Simple Intuition:**
+Because system accounts are never locked, normal retail traffic (`300 wd/s` spread across 2M users) scales effortlessly. The first hard bottleneck is the `200 wd/s` corporate wallet: one database row can only handle one exclusive transaction at a time (~5ms each, capping around `200 TPS`). After that, inserting ~200M ledger rows a day bloats indexes, and waiting on slow bank APIs inside API pods starves incoming user requests.
 
 At **`500 wd/s`** across **`2,000,000` wallets**:
 - **Distributed Retail Traffic (`300 wd/s` across `2M` wallets):** Already **not** a bottleneck. Because `SYSTEM` accounts (`PAYOUT_CLEARING`, `FEE_REVENUE`) keep `balance IS NULL` and are never locked or updated, retail withdrawals share zero row locks and represent `< 2,500` IOPS on NVMe PostgreSQL.
@@ -42,6 +50,9 @@ At `200 wd/s` sustained (and bursts above `200/s`), `corp_user` sits at **100% r
 
 ## 3. Phase 1 Evolution: Scaling on PostgreSQL (`500` → `5,000+ wd/s`)
 
+**Simple Intuition:**
+You can push PostgreSQL to `5,000+ wd/s` without changing engines: (1) batch or shard the hot corporate wallet so it stops acquiring a fresh row lock per request, (2) range-partition the ledger tables so active indexes stay in RAM, put PgBouncer in front, and send reads to replicas, and (3) run API servers and outbound payout workers in separate pods so slow banks never stall user HTTP traffic.
+
 ### 3A. Breaking the `200 wd/s` Corporate Hot-Row Wall
 1. **Per-Wallet Group-Commit Micro-Batching *(Primary Recommendation)*:**
    - Route high-throughput corporate accounts (`corp_user`) through a partitioned coalescer with a **`5–10ms` batch window** (2–10 requests per DB transaction).
@@ -61,4 +72,8 @@ At `200 wd/s` sustained (and bursts above `200/s`), `corp_user` sits at **100% r
 
 ## 4. Phase 2 Evolution: Offloading the Hot Ledger to **TigerBeetle** (`10,000` → `1,000,000 TPS`)
 
+**Simple Intuition:**
+If volume ever explodes past what PostgreSQL row locks can absorb (`10,000+ TPS`), move the hot balance and double-entry postings into **TigerBeetle** (a purpose-built financial ledger engine that already supports non-negative balances and two-phase holds natively), while keeping PostgreSQL as the workflow and history database—using the same `UUIDv7` IDs so retries stay idempotent without `2PC`.
+
+**Technical Details:**
 If exchange volume reaches `10,000+ TPS`, offload real-time balance & double-entry postings to **TigerBeetle** (`io_uring` + VSR consensus, native `debits_must_not_exceed_credits`, native two-phase `pending` holds matching `WD_HOLD`/`WD_SETTLE`/`WD_RELEASE`), while **PostgreSQL stays the Control Plane** (`idempotency_keys`, IBAN/TRC20 validation, withdrawal state machine, `outbox_events`, ledger history read model). Because TigerBeetle uses deterministic `u128` idempotent `Transfer.id`s matching Postgres `UUIDv7` keys, crash recovery retries with the identical `u128` ID (`EXISTS` idempotency) with **zero distributed `2PC`**.

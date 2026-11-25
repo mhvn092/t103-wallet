@@ -1,4 +1,9 @@
-type PspStatusValue = 'INIT' | 'PAID' | 'VERIFIED' | 'FAILED' | 'EXPIRED';
+import {
+  PayoutStatusValue,
+  PspStatusValue,
+} from '../../common/enums/domain.enums.js';
+
+export { PayoutStatusValue, PspStatusValue };
 
 export type PspPaymentStatusResult =
   | {
@@ -25,9 +30,6 @@ export type PayoutCreateResult =
   | { kind: 'ACCEPTED'; trackingId: string }
   | { kind: 'PERMANENT_REJECTED'; reason: string }
   | { kind: 'AMBIGUOUS'; reason: string };
-
-export type PayoutStatusValue =
-  'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'RETURNED' | 'REVERSED';
 
 export type PayoutTransferStatusResult =
   | {

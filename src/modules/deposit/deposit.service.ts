@@ -11,6 +11,19 @@ import {
   ne,
   sql,
 } from 'drizzle-orm';
+import {
+  Currency,
+  DepositStatus,
+  DiscrepancyRefType,
+  DiscrepancyStatus,
+  DiscrepancyType,
+  LedgerDirection,
+  LedgerRefType,
+  LedgerTxType,
+  PspStatusValue,
+  SystemOwnerId,
+  UserAccountType,
+} from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -100,13 +113,13 @@ export class DepositService {
 
     let settledIdempotency = false;
     try {
-      const amountMinor = parseAmountToMinor(params.dto.amount, 'IRT');
+      const amountMinor = parseAmountToMinor(params.dto.amount, Currency.IRT);
       await this._walletService.ensureUserScaffold({
         accountSpecs: [
           {
             userId: params.dto.userId,
-            currency: 'IRT',
-            accountType: 'AVAILABLE',
+            currency: Currency.IRT,
+            accountType: UserAccountType.AVAILABLE,
           },
         ],
       });
@@ -198,7 +211,7 @@ export class DepositService {
       return { received: true };
     }
 
-    if (row.status === 'SUCCEEDED') {
+    if (row.status === DepositStatus.SUCCEEDED) {
       return {
         received: true,
         depositId: row.id,
@@ -235,7 +248,7 @@ export class DepositService {
     const validId = assertValidUuid(depositId, 'depositId');
     const row = await this._requireDeposit(validId);
 
-    if (row.status === 'SUCCEEDED') {
+    if (row.status === DepositStatus.SUCCEEDED) {
       return toDepositDetailResponseDto(row);
     }
 
@@ -252,17 +265,23 @@ export class DepositService {
       return this._recordOrderIdMismatch(row, inquiry.orderId);
     }
 
-    if (inquiry.status === 'INIT') {
+    if (inquiry.status === PspStatusValue.INIT) {
       return this._handleInitStatus(row);
     }
 
-    if (inquiry.status === 'FAILED' || inquiry.status === 'EXPIRED') {
+    if (
+      inquiry.status === PspStatusValue.FAILED ||
+      inquiry.status === PspStatusValue.EXPIRED
+    ) {
       return this._markDepositFailedIfUnsettled(row, null);
     }
 
     const verifyResult = await this._pspClient.verifyPayment(row.pspToken);
     if (verifyResult.kind === 'RETRYABLE_ERROR') {
-      const nextStatus = row.status === 'FAILED' ? 'FAILED' : 'VERIFYING';
+      const nextStatus =
+        row.status === DepositStatus.FAILED
+          ? DepositStatus.FAILED
+          : DepositStatus.VERIFYING;
       return this._reschedulePoll(row, nextStatus);
     }
 
@@ -291,7 +310,7 @@ export class DepositService {
           .from(deposits)
           .where(
             and(
-              ne(deposits.status, 'SUCCEEDED'),
+              ne(deposits.status, DepositStatus.SUCCEEDED),
               isNotNull(deposits.nextPollAt),
               lte(deposits.nextPollAt, now),
             ),
@@ -375,7 +394,7 @@ export class DepositService {
         userId,
         requestedAmount: amountMinor.toString(),
         orderId,
-        status: 'INITIATED',
+        status: DepositStatus.INITIATED,
         nextPollAt: new Date(now.getTime() + this._getOrphanInitiatedAgeMs()),
       })
       .returning();
@@ -438,7 +457,7 @@ export class DepositService {
     const now = new Date();
     const body: DepositCreateResponseDto = {
       depositId: params.depositId,
-      status: 'AWAITING_PAYMENT',
+      status: DepositStatus.AWAITING_PAYMENT,
       paymentUrl: params.pspPayment.paymentUrl,
       expiresAt: params.pspPayment.expiresAt.toISOString(),
       createdAt: params.createdAt.toISOString(),
@@ -448,7 +467,7 @@ export class DepositService {
       const updated = await tx
         .update(deposits)
         .set({
-          status: 'AWAITING_PAYMENT',
+          status: DepositStatus.AWAITING_PAYMENT,
           pspToken: params.pspPayment.token,
           paymentUrl: params.pspPayment.paymentUrl,
           expiresAt: params.pspPayment.expiresAt,
@@ -461,7 +480,7 @@ export class DepositService {
         .where(
           and(
             eq(deposits.id, params.depositId),
-            eq(deposits.status, 'INITIATED'),
+            eq(deposits.status, DepositStatus.INITIATED),
           ),
         )
         .returning({ id: deposits.id });
@@ -512,7 +531,7 @@ export class DepositService {
           and(
             eq(deposits.id, row.id),
             isNull(deposits.pspToken),
-            ne(deposits.status, 'SUCCEEDED'),
+            ne(deposits.status, DepositStatus.SUCCEEDED),
           ),
         );
     } catch (err) {
@@ -565,7 +584,7 @@ export class DepositService {
   ): Promise<DepositDetailResponseDto> {
     const ageMs = Date.now() - row.createdAt.getTime();
     if (
-      row.status === 'INITIATED' &&
+      row.status === DepositStatus.INITIATED &&
       ageMs >= this._getOrphanInitiatedAgeMs()
     ) {
       return this._markDepositFailedIfUnsettled(row, null);
@@ -589,7 +608,9 @@ export class DepositService {
       return this._markDepositFailedIfUnsettled(row, gracePollAt);
     }
     const targetStatus =
-      row.status === 'FAILED' ? 'FAILED' : 'AWAITING_PAYMENT';
+      row.status === DepositStatus.FAILED
+        ? DepositStatus.FAILED
+        : DepositStatus.AWAITING_PAYMENT;
     return this._reschedulePoll(row, targetStatus);
   }
 
@@ -605,10 +626,10 @@ export class DepositService {
     return this._recordVerificationIssue(
       row,
       {
-        status: expired ? 'FAILED' : row.status,
+        status: expired ? DepositStatus.FAILED : row.status,
         nextPollAt: expired ? null : this._verificationRetryAt(),
       },
-      'ORDER_ID_MISMATCH',
+      DiscrepancyType.ORDER_ID_MISMATCH,
       { expectedOrderId: row.orderId, actualOrderId },
     );
   }
@@ -619,16 +640,16 @@ export class DepositService {
   ): Promise<DepositDetailResponseDto> {
     return this._recordVerificationIssue(
       row,
-      { status: 'VERIFYING', nextPollAt: null },
-      'VERIFIED_AMOUNT_OUT_OF_RANGE',
+      { status: DepositStatus.VERIFYING, nextPollAt: null },
+      DiscrepancyType.VERIFIED_AMOUNT_OUT_OF_RANGE,
       { reportedAmount },
     );
   }
 
   private async _recordVerificationIssue(
     row: DepositEntity,
-    patch: { status: string; nextPollAt: Date | null },
-    type: string,
+    patch: { status: DepositStatus; nextPollAt: Date | null },
+    type: DiscrepancyType,
     details: Record<string, unknown>,
   ): Promise<DepositDetailResponseDto> {
     const updated = await this._databaseService.runInTransaction(async (tx) => {
@@ -652,7 +673,7 @@ export class DepositService {
   private async _recordDepositDiscrepancy(
     tx: DbTransaction,
     row: DepositEntity,
-    type: string,
+    type: DiscrepancyType,
     amount: string,
     details: Record<string, unknown>,
   ): Promise<void> {
@@ -660,14 +681,14 @@ export class DepositService {
       .insert(financialDiscrepancies)
       .values({
         id: generateUuidV7(),
-        referenceType: 'DEPOSIT',
+        referenceType: DiscrepancyRefType.DEPOSIT,
         referenceId: row.id,
         userId: row.userId,
         discrepancyType: type,
         amount,
-        currency: 'IRT',
+        currency: Currency.IRT,
         providerPayload: details,
-        status: 'OPEN',
+        status: DiscrepancyStatus.OPEN,
       })
       .onConflictDoUpdate({
         target: [
@@ -675,7 +696,11 @@ export class DepositService {
           financialDiscrepancies.referenceId,
           financialDiscrepancies.discrepancyType,
         ],
-        set: { status: 'OPEN', amount, providerPayload: details },
+        set: {
+          status: DiscrepancyStatus.OPEN,
+          amount,
+          providerPayload: details,
+        },
       });
   }
 
@@ -685,7 +710,7 @@ export class DepositService {
 
   private async _reschedulePoll(
     row: DepositEntity,
-    targetStatus: string,
+    targetStatus: DepositStatus,
   ): Promise<DepositDetailResponseDto> {
     return this._applyUnsettledPatch(row, {
       status: targetStatus,
@@ -698,14 +723,14 @@ export class DepositService {
     nextPollAt: Date | null,
   ): Promise<DepositDetailResponseDto> {
     return this._applyUnsettledPatch(row, {
-      status: 'FAILED',
+      status: DepositStatus.FAILED,
       nextPollAt,
     });
   }
 
   private async _applyUnsettledPatch(
     row: DepositEntity,
-    patch: { status: string; nextPollAt: Date | null },
+    patch: { status: DepositStatus; nextPollAt: Date | null },
   ): Promise<DepositDetailResponseDto> {
     const updated = await this._updateUnsettledDeposit(row, patch);
     return toDepositDetailResponseDto(
@@ -715,7 +740,7 @@ export class DepositService {
 
   private async _updateUnsettledDeposit(
     row: DepositEntity,
-    patch: { status: string; nextPollAt: Date | null },
+    patch: { status: DepositStatus; nextPollAt: Date | null },
     db: DbExecutor = this._databaseService.db,
   ): Promise<DepositEntity | undefined> {
     const now = new Date();
@@ -732,7 +757,7 @@ export class DepositService {
           eq(deposits.id, row.id),
           eq(deposits.status, row.status),
           eq(deposits.version, row.version),
-          ne(deposits.status, 'SUCCEEDED'),
+          ne(deposits.status, DepositStatus.SUCCEEDED),
         ),
       )
       .returning();
@@ -759,14 +784,14 @@ export class DepositService {
     pspRefId: string | null;
   }): Promise<DepositDetailResponseDto> {
     const preRead = await this._requireDeposit(params.depositId);
-    if (preRead.status === 'SUCCEEDED') {
+    if (preRead.status === DepositStatus.SUCCEEDED) {
       return toDepositDetailResponseDto(preRead);
     }
 
     const availableSpec = {
       userId: preRead.userId,
-      currency: 'IRT' as const,
-      accountType: 'AVAILABLE' as const,
+      currency: Currency.IRT,
+      accountType: UserAccountType.AVAILABLE,
     };
 
     await this._walletService.ensureUserScaffold({
@@ -789,7 +814,7 @@ export class DepositService {
         );
       }
 
-      if (locked.status === 'SUCCEEDED') {
+      if (locked.status === DepositStatus.SUCCEEDED) {
         return locked;
       }
 
@@ -810,7 +835,7 @@ export class DepositService {
           (await this._updateUnsettledDeposit(
             locked,
             {
-              status: 'VERIFYING',
+              status: DepositStatus.VERIFYING,
               nextPollAt: null,
             },
             tx,
@@ -828,13 +853,13 @@ export class DepositService {
       );
       const pspClearing = await this._walletService.getSystemAccount(
         tx,
-        'PSP_CLEARING',
-        'IRT',
+        SystemOwnerId.PSP_CLEARING,
+        Currency.IRT,
       );
 
       await this._ledgerService.postTransaction(tx, {
-        type: 'DEPOSIT',
-        referenceType: 'DEPOSIT',
+        type: LedgerTxType.DEPOSIT,
+        referenceType: LedgerRefType.DEPOSIT,
         referenceId: locked.id,
         description: `PSP deposit verified (${locked.orderId})`,
         metadata: {
@@ -845,12 +870,12 @@ export class DepositService {
         postings: [
           {
             account: pspClearing,
-            direction: 'DEBIT',
+            direction: LedgerDirection.DEBIT,
             amount: params.verifiedAmountIrt,
           },
           {
             account: userAvailable,
-            direction: 'CREDIT',
+            direction: LedgerDirection.CREDIT,
             amount: params.verifiedAmountIrt,
           },
         ],
@@ -864,7 +889,7 @@ export class DepositService {
       const [updated] = await tx
         .update(deposits)
         .set({
-          status: 'SUCCEEDED',
+          status: DepositStatus.SUCCEEDED,
           verifiedAmount: params.verifiedAmountIrt.toString(),
           amountMismatch,
           pspRefId: params.pspRefId,
@@ -878,12 +903,15 @@ export class DepositService {
 
       await tx
         .update(financialDiscrepancies)
-        .set({ status: 'RESOLVED' })
+        .set({ status: DiscrepancyStatus.RESOLVED })
         .where(
           and(
-            eq(financialDiscrepancies.referenceType, 'DEPOSIT'),
+            eq(
+              financialDiscrepancies.referenceType,
+              DiscrepancyRefType.DEPOSIT,
+            ),
             eq(financialDiscrepancies.referenceId, locked.id),
-            eq(financialDiscrepancies.status, 'OPEN'),
+            eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN),
           ),
         );
 
@@ -891,7 +919,7 @@ export class DepositService {
         await this._recordDepositDiscrepancy(
           tx,
           locked,
-          'AMOUNT_MISMATCH',
+          DiscrepancyType.AMOUNT_MISMATCH,
           params.verifiedAmountIrt.toString(),
           {
             requestedAmount: locked.requestedAmount,
@@ -912,9 +940,9 @@ export class DepositService {
     tx: DbTransaction,
     row: DepositEntity,
     verification: { verifiedAmountIrt: bigint; pspRefId: string | null },
-  ): Promise<string | null> {
+  ): Promise<DiscrepancyType | null> {
     if (verification.verifiedAmountIrt > BigInt(row.requestedAmount)) {
-      return 'DEPOSIT_OVERPAYMENT';
+      return DiscrepancyType.DEPOSIT_OVERPAYMENT;
     }
     const ref = verification.pspRefId;
     if (!ref) {
@@ -930,7 +958,7 @@ export class DepositService {
       .from(deposits)
       .where(and(eq(deposits.pspRefId, ref), ne(deposits.id, row.id)))
       .limit(1);
-    return existing ? 'PSP_REFERENCE_REUSED' : null;
+    return existing ? DiscrepancyType.PSP_REFERENCE_REUSED : null;
   }
 
   private readonly _logger = new Logger(DepositService.name);

@@ -9,23 +9,28 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import {
+  accountOwnerTypeEnum,
+  accountTypeEnum,
+  currencyEnum,
+  ledgerDirectionEnum,
+} from './enums.js';
 
 export const accounts = pgTable(
   'accounts',
   {
     id: uuid('id').primaryKey(),
-    ownerType: text('owner_type').notNull(), // 'USER' | 'SYSTEM'
+    ownerType: accountOwnerTypeEnum('owner_type').notNull(),
     ownerId: text('owner_id').notNull(),
-    currency: text('currency').notNull(), // 'IRT' | 'USDT'
-    accountType: text('account_type').notNull(), // 'AVAILABLE' | 'LOCKED' | 'RECEIVABLE' | 'CLEARING' | 'ADJUSTMENT' | 'REVENUE'
-    normalSide: text('normal_side').notNull(), // 'DEBIT' | 'CREDIT'
+    currency: currencyEnum('currency').notNull(),
+    accountType: accountTypeEnum('account_type').notNull(),
+    normalSide: ledgerDirectionEnum('normal_side').notNull(),
     balance: numeric('balance', { precision: 38, scale: 0 }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (t) => [
-    // Migration 0004 attaches INCLUDE (id) while keeping mutable balance out of INCLUDE to preserve HOT updates
     uniqueIndex('accounts_owner_currency_type_uq').on(
       t.ownerType,
       t.ownerId,

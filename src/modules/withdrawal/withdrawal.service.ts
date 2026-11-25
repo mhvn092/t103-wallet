@@ -2,6 +2,16 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { PAUSED_WITHDRAWALS_CONTROL_KEY } from '../../common/constants/system-controls.constants.js';
+import {
+  Currency,
+  DiscrepancyRefType,
+  DiscrepancyStatus,
+  DiscrepancyType,
+  PayoutStatusValue,
+  UserAccountType,
+  WithdrawalFailureReason,
+  WithdrawalStatus,
+} from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -12,7 +22,6 @@ import {
 } from '../../common/utils/backoff.util.js';
 import { assertValidDestination } from '../../common/utils/destination-validator.util.js';
 import {
-  type Currency,
   formatMinorToApi,
   parseAmountToMinor,
 } from '../../common/utils/money.util.js';
@@ -32,10 +41,7 @@ import { IdempotencyService } from '../idempotency/idempotency.service.js';
 import type { IdempotentExecutionResult } from '../idempotency/idempotency.types.js';
 import { verifyHmacSha256Hex } from '../providers/hmac.util.js';
 import { PayoutClient } from '../providers/payout.client.js';
-import type {
-  PayoutStatusValue,
-  PayoutTransferStatusResult,
-} from '../providers/provider.types.js';
+import type { PayoutTransferStatusResult } from '../providers/provider.types.js';
 import { WalletService } from '../wallet/wallet.service.js';
 import type { WithdrawalCreateDto } from './dto/withdrawal-create.dto.js';
 import type { WithdrawalResolveDto } from './dto/withdrawal-resolve.dto.js';
@@ -85,17 +91,17 @@ export class WithdrawalService {
     const availableSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: 'AVAILABLE' as const,
+      accountType: UserAccountType.AVAILABLE,
     };
     const lockedSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: 'LOCKED' as const,
+      accountType: UserAccountType.LOCKED,
     };
     const receivableSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: 'RECEIVABLE' as const,
+      accountType: UserAccountType.RECEIVABLE,
     };
 
     await this._walletService.ensureUserScaffold({
@@ -276,7 +282,7 @@ export class WithdrawalService {
                 tx,
                 locked,
                 {
-                  reason: 'CANCELLED_BY_USER',
+                  reason: WithdrawalFailureReason.CANCELLED_BY_USER,
                   markTerminalReturn: action.markTerminalReturn,
                 },
               );
@@ -298,12 +304,20 @@ export class WithdrawalService {
   }): Promise<IdempotentExecutionResult<WithdrawalResponseDto>> {
     const validId = assertValidUuid(params.withdrawalId, 'withdrawalId');
     const preRead = await this._requireWithdrawal(validId);
-    const ccy: Currency = preRead.currency === 'USDT' ? 'USDT' : 'IRT';
+    const ccy = preRead.currency;
 
     await this._walletService.ensureUserScaffold({
       accountSpecs: [
-        { userId: preRead.userId, currency: ccy, accountType: 'AVAILABLE' },
-        { userId: preRead.userId, currency: ccy, accountType: 'LOCKED' },
+        {
+          userId: preRead.userId,
+          currency: ccy,
+          accountType: UserAccountType.AVAILABLE,
+        },
+        {
+          userId: preRead.userId,
+          currency: ccy,
+          accountType: UserAccountType.LOCKED,
+        },
       ],
       dailyLimitKeys: [
         { userId: preRead.userId, limitDate: preRead.limitDate },
@@ -534,7 +548,7 @@ export class WithdrawalService {
 
   private _assertAboveMinimum(amountMinor: bigint, currency: Currency): void {
     const minStr =
-      currency === 'IRT'
+      currency === Currency.IRT
         ? this._configService.get('MIN_WITHDRAWAL_IRT', { infer: true })
         : this._configService.get('MIN_WITHDRAWAL_USDT', { infer: true });
     const minMinor = parseAmountToMinor(minStr, currency);
@@ -601,9 +615,9 @@ export class WithdrawalService {
         .from(withdrawals)
         .where(
           or(
-            eq(withdrawals.status, 'PENDING_DISPATCH'),
+            eq(withdrawals.status, WithdrawalStatus.PENDING_DISPATCH),
             and(
-              eq(withdrawals.status, 'DISPATCHING'),
+              eq(withdrawals.status, WithdrawalStatus.DISPATCHING),
               lte(withdrawals.leaseUntil, now),
             ),
           ),
@@ -617,7 +631,7 @@ export class WithdrawalService {
         const [updated] = await tx
           .update(withdrawals)
           .set({
-            status: 'DISPATCHING',
+            status: WithdrawalStatus.DISPATCHING,
             leaseUntil,
             version: sql`${withdrawals.version} + 1`,
             updatedAt: now,
@@ -633,7 +647,7 @@ export class WithdrawalService {
         if (updated) {
           claimed.push({
             row: updated,
-            wasRecovery: candidate.status === 'DISPATCHING',
+            wasRecovery: candidate.status === WithdrawalStatus.DISPATCHING,
             claimedVersion: updated.version,
           });
         }
@@ -692,7 +706,7 @@ export class WithdrawalService {
     slaMs: number,
     wasRecovery: boolean,
   ): Promise<void> {
-    const ccy: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
+    const ccy = row.currency;
     const result = await this._payoutClient.createTransfer({
       requestId: row.providerRequestId,
       currency: ccy,
@@ -705,7 +719,7 @@ export class WithdrawalService {
       await this._databaseService.db
         .update(withdrawals)
         .set({
-          status: 'PROCESSING',
+          status: WithdrawalStatus.PROCESSING,
           providerRefId: result.trackingId,
           leaseUntil: null,
           nextPollAt: new Date(
@@ -717,7 +731,7 @@ export class WithdrawalService {
         .where(
           and(
             eq(withdrawals.id, row.id),
-            eq(withdrawals.status, 'DISPATCHING'),
+            eq(withdrawals.status, WithdrawalStatus.DISPATCHING),
             eq(withdrawals.version, claimedVersion),
           ),
         );
@@ -757,7 +771,7 @@ export class WithdrawalService {
       .where(
         and(
           eq(withdrawals.id, row.id),
-          eq(withdrawals.status, 'DISPATCHING'),
+          eq(withdrawals.status, WithdrawalStatus.DISPATCHING),
           eq(withdrawals.version, claimedVersion),
         ),
       );
@@ -771,7 +785,7 @@ export class WithdrawalService {
     await this._databaseService.db
       .update(withdrawals)
       .set({
-        status: 'MANUAL_REVIEW',
+        status: WithdrawalStatus.MANUAL_REVIEW,
         leaseUntil: null,
         nextPollAt: new Date(
           now.getTime() + addJitterMs(WITHDRAWAL_PROCESSING_POLL_DELAY_MS),
@@ -782,7 +796,7 @@ export class WithdrawalService {
       .where(
         and(
           eq(withdrawals.id, withdrawalId),
-          eq(withdrawals.status, 'DISPATCHING'),
+          eq(withdrawals.status, WithdrawalStatus.DISPATCHING),
           eq(withdrawals.version, claimedVersion),
         ),
       );
@@ -803,7 +817,7 @@ export class WithdrawalService {
 
       if (
         !locked ||
-        locked.status !== 'DISPATCHING' ||
+        locked.status !== WithdrawalStatus.DISPATCHING ||
         locked.version !== claimedVersion
       ) {
         return;
@@ -828,7 +842,7 @@ export class WithdrawalService {
       const inquiry = await this._payoutClient.getTransfer(
         row.providerRequestId,
       );
-      if (row.status === 'FAILED') {
+      if (row.status === WithdrawalStatus.FAILED) {
         await this._pollFailedLateVerificationRow(row, inquiry, slaMs);
         return;
       }
@@ -859,7 +873,7 @@ export class WithdrawalService {
           },
         );
         if (
-          updated.status === 'PROCESSING' &&
+          updated.status === WithdrawalStatus.PROCESSING &&
           Date.now() - row.createdAt.getTime() >= slaMs
         ) {
           await this._escalateToManualReview(row.id, row.version);
@@ -867,7 +881,10 @@ export class WithdrawalService {
         return;
       }
 
-      if (inquiry.kind === 'NOT_FOUND' && row.status === 'MANUAL_REVIEW') {
+      if (
+        inquiry.kind === 'NOT_FOUND' &&
+        row.status === WithdrawalStatus.MANUAL_REVIEW
+      ) {
         if (row.providerRefId !== null) {
           this._logger.warn(
             `Payout returned 404 for previously accepted MANUAL_REVIEW withdrawal=${row.id} ref=${row.providerRefId}; keeping in MANUAL_REVIEW for ops triage`,
@@ -879,7 +896,7 @@ export class WithdrawalService {
       }
 
       if (
-        row.status === 'PROCESSING' &&
+        row.status === WithdrawalStatus.PROCESSING &&
         Date.now() - row.createdAt.getTime() >= slaMs
       ) {
         await this._escalateToManualReview(row.id, row.version);
@@ -934,12 +951,15 @@ export class WithdrawalService {
       return;
     }
 
-    if (inquiry.status === 'FAILED') {
+    if (inquiry.status === PayoutStatusValue.FAILED) {
       await this._stopFailedLateVerification(row.id, true);
       return;
     }
 
-    if (inquiry.status === 'PENDING' || inquiry.status === 'PROCESSING') {
+    if (
+      inquiry.status === PayoutStatusValue.PENDING ||
+      inquiry.status === PayoutStatusValue.PROCESSING
+    ) {
       if (await this._isLateVerificationExpired(row.id, slaMs)) {
         await this._stopFailedLateVerification(row.id, false);
       }
@@ -963,7 +983,7 @@ export class WithdrawalService {
     const [claimed] = await this._databaseService.db
       .update(withdrawals)
       .set({
-        status: 'DISPATCHING',
+        status: WithdrawalStatus.DISPATCHING,
         leaseUntil,
         nextPollAt: null,
         version: sql`${withdrawals.version} + 1`,
@@ -972,7 +992,7 @@ export class WithdrawalService {
       .where(
         and(
           eq(withdrawals.id, row.id),
-          eq(withdrawals.status, 'MANUAL_REVIEW'),
+          eq(withdrawals.status, WithdrawalStatus.MANUAL_REVIEW),
           isNull(withdrawals.providerRefId),
           eq(withdrawals.version, row.version),
         ),
@@ -993,14 +1013,14 @@ export class WithdrawalService {
     await this._databaseService.db
       .update(withdrawals)
       .set({
-        status: 'MANUAL_REVIEW',
+        status: WithdrawalStatus.MANUAL_REVIEW,
         version: sql`${withdrawals.version} + 1`,
         updatedAt: new Date(),
       })
       .where(
         and(
           eq(withdrawals.id, withdrawalId),
-          eq(withdrawals.status, 'PROCESSING'),
+          eq(withdrawals.status, WithdrawalStatus.PROCESSING),
           eq(withdrawals.version, expectedVersion),
         ),
       );
@@ -1017,25 +1037,29 @@ export class WithdrawalService {
     },
   ): Promise<WithdrawalResponseDto> {
     const preRead = await this._requireWithdrawal(withdrawalId);
-    const ccy: Currency = preRead.currency === 'USDT' ? 'USDT' : 'IRT';
+    const ccy = preRead.currency;
 
     if (
-      providerStatus === 'SUCCEEDED' ||
-      providerStatus === 'RETURNED' ||
-      providerStatus === 'REVERSED'
+      providerStatus === PayoutStatusValue.SUCCEEDED ||
+      providerStatus === PayoutStatusValue.RETURNED ||
+      providerStatus === PayoutStatusValue.REVERSED
     ) {
       await this._walletService.ensureUserScaffold({
         accountSpecs: [
-          { userId: preRead.userId, currency: ccy, accountType: 'AVAILABLE' },
           {
             userId: preRead.userId,
-            currency: 'IRT',
-            accountType: 'RECEIVABLE',
+            currency: ccy,
+            accountType: UserAccountType.AVAILABLE,
           },
           {
             userId: preRead.userId,
-            currency: 'USDT',
-            accountType: 'RECEIVABLE',
+            currency: Currency.IRT,
+            accountType: UserAccountType.RECEIVABLE,
+          },
+          {
+            userId: preRead.userId,
+            currency: Currency.USDT,
+            accountType: UserAccountType.RECEIVABLE,
           },
         ],
         dailyLimitKeys: [
@@ -1100,7 +1124,10 @@ export class WithdrawalService {
     }
 
     const latest = await this._requireWithdrawal(row.id);
-    if (latest.status === 'FAILED' && latest.nextPollAt !== null) {
+    if (
+      latest.status === WithdrawalStatus.FAILED &&
+      latest.nextPollAt !== null
+    ) {
       throw new DomainException(
         HttpStatus.SERVICE_UNAVAILABLE,
         ErrorCode.PROVIDER_UNAVAILABLE,
@@ -1125,12 +1152,15 @@ export class WithdrawalService {
       return;
     }
 
-    if (inquiry.status === 'FAILED') {
+    if (inquiry.status === PayoutStatusValue.FAILED) {
       await this._stopFailedLateVerification(row.id, true);
       return;
     }
 
-    if (inquiry.status === 'PENDING' || inquiry.status === 'PROCESSING') {
+    if (
+      inquiry.status === PayoutStatusValue.PENDING ||
+      inquiry.status === PayoutStatusValue.PROCESSING
+    ) {
       return;
     }
 
@@ -1161,13 +1191,13 @@ export class WithdrawalService {
       .insert(financialDiscrepancies)
       .values({
         id: generateUuidV7(),
-        referenceType: 'WITHDRAWAL',
+        referenceType: DiscrepancyRefType.WITHDRAWAL,
         referenceId: locked.id,
         userId: locked.userId,
-        discrepancyType: 'LATE_SUCCESS_VERIFICATION',
+        discrepancyType: DiscrepancyType.LATE_SUCCESS_VERIFICATION,
         amount: locked.amount,
         currency: locked.currency,
-        status: 'OPEN',
+        status: DiscrepancyStatus.OPEN,
         createdAt: now,
       })
       .onConflictDoUpdate({
@@ -1176,7 +1206,7 @@ export class WithdrawalService {
           financialDiscrepancies.referenceId,
           financialDiscrepancies.discrepancyType,
         ],
-        set: { status: 'OPEN', createdAt: now },
+        set: { status: DiscrepancyStatus.OPEN, createdAt: now },
       });
   }
 
@@ -1192,7 +1222,7 @@ export class WithdrawalService {
         .for('update')
         .limit(1);
 
-      if (!locked || locked.status !== 'FAILED') {
+      if (!locked || locked.status !== WithdrawalStatus.FAILED) {
         return;
       }
 
@@ -1211,16 +1241,19 @@ export class WithdrawalService {
       if (resolveDiscrepancy) {
         await tx
           .update(financialDiscrepancies)
-          .set({ status: 'RESOLVED' })
+          .set({ status: DiscrepancyStatus.RESOLVED })
           .where(
             and(
-              eq(financialDiscrepancies.referenceType, 'WITHDRAWAL'),
+              eq(
+                financialDiscrepancies.referenceType,
+                DiscrepancyRefType.WITHDRAWAL,
+              ),
               eq(financialDiscrepancies.referenceId, locked.id),
               eq(
                 financialDiscrepancies.discrepancyType,
-                'LATE_SUCCESS_VERIFICATION',
+                DiscrepancyType.LATE_SUCCESS_VERIFICATION,
               ),
-              eq(financialDiscrepancies.status, 'OPEN'),
+              eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN),
             ),
           );
       }
@@ -1236,13 +1269,16 @@ export class WithdrawalService {
       .from(financialDiscrepancies)
       .where(
         and(
-          eq(financialDiscrepancies.referenceType, 'WITHDRAWAL'),
+          eq(
+            financialDiscrepancies.referenceType,
+            DiscrepancyRefType.WITHDRAWAL,
+          ),
           eq(financialDiscrepancies.referenceId, withdrawalId),
           eq(
             financialDiscrepancies.discrepancyType,
-            'LATE_SUCCESS_VERIFICATION',
+            DiscrepancyType.LATE_SUCCESS_VERIFICATION,
           ),
-          eq(financialDiscrepancies.status, 'OPEN'),
+          eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN),
         ),
       )
       .limit(1);
@@ -1264,7 +1300,8 @@ export class WithdrawalService {
     | { kind: 'NEEDS_AUTHORITATIVE_VERIFY'; row: WithdrawalEntity }
   > {
     const hasPrior =
-      locked.status === 'FAILED' && providerStatus === 'SUCCEEDED'
+      locked.status === WithdrawalStatus.FAILED &&
+      providerStatus === PayoutStatusValue.SUCCEEDED
         ? await this._withdrawalLedgerService.hasPriorSettlementOrReturn(
             tx,
             locked.id,
@@ -1312,9 +1349,10 @@ export class WithdrawalService {
         };
       case 'FAIL_AND_RELEASE': {
         const defaultReason =
-          providerStatus === 'RETURNED' || providerStatus === 'REVERSED'
-            ? 'BANK_RETURNED'
-            : 'PROVIDER_FAILED';
+          providerStatus === PayoutStatusValue.RETURNED ||
+          providerStatus === PayoutStatusValue.REVERSED
+            ? WithdrawalFailureReason.BANK_RETURNED
+            : WithdrawalFailureReason.PROVIDER_FAILED;
         return {
           kind: 'DONE',
           row: await this._withdrawalLedgerService.failAndReleaseLockedWithdrawal(
@@ -1333,7 +1371,7 @@ export class WithdrawalService {
           row: await this._withdrawalLedgerService.reverseSucceededWithdrawal(
             tx,
             locked,
-            meta.reason ?? 'BANK_RETURNED',
+            meta.reason ?? WithdrawalFailureReason.BANK_RETURNED,
           ),
         };
       case 'MARK_TERMINAL_RETURN_ONLY':
@@ -1343,7 +1381,7 @@ export class WithdrawalService {
           row: await this._withdrawalLedgerService.markTerminalReturnOnly(
             tx,
             locked,
-            meta.reason ?? 'BANK_RETURNED',
+            meta.reason ?? WithdrawalFailureReason.BANK_RETURNED,
           ),
         };
       case 'LATE_SUCCESS_CLAWBACK':
@@ -1364,14 +1402,14 @@ export class WithdrawalService {
     locked: WithdrawalEntity,
     providerRefId: string | null,
   ): Promise<WithdrawalEntity> {
-    if (locked.status !== 'DISPATCHING') {
+    if (locked.status !== WithdrawalStatus.DISPATCHING) {
       return locked;
     }
     const now = new Date();
     const [updated] = await tx
       .update(withdrawals)
       .set({
-        status: 'PROCESSING',
+        status: WithdrawalStatus.PROCESSING,
         providerRefId: providerRefId ?? locked.providerRefId,
         leaseUntil: null,
         nextPollAt: new Date(
@@ -1392,16 +1430,19 @@ export class WithdrawalService {
   ): Promise<void> {
     await tx
       .update(financialDiscrepancies)
-      .set({ status: 'RESOLVED' })
+      .set({ status: DiscrepancyStatus.RESOLVED })
       .where(
         and(
-          eq(financialDiscrepancies.referenceType, 'WITHDRAWAL'),
+          eq(
+            financialDiscrepancies.referenceType,
+            DiscrepancyRefType.WITHDRAWAL,
+          ),
           eq(financialDiscrepancies.referenceId, id),
           inArray(financialDiscrepancies.discrepancyType, [
-            'PAYOUT_PAYLOAD_MISMATCH',
-            'LATE_SUCCESS_VERIFICATION',
+            DiscrepancyType.PAYOUT_PAYLOAD_MISMATCH,
+            DiscrepancyType.LATE_SUCCESS_VERIFICATION,
           ]),
-          eq(financialDiscrepancies.status, 'OPEN'),
+          eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN),
         ),
       );
   }
@@ -1434,7 +1475,7 @@ export class WithdrawalService {
     expectedVersion?: bigint;
   }): Promise<WithdrawalEntity> {
     const { row } = params;
-    const expectedCurrency: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
+    const expectedCurrency = row.currency;
 
     this._logger.warn(
       `Payout payload mismatch for withdrawal=${row.id} req=${row.providerRequestId}; halting settlement and escalating to MANUAL_REVIEW`,
@@ -1459,10 +1500,10 @@ export class WithdrawalService {
         .insert(financialDiscrepancies)
         .values({
           id: generateUuidV7(),
-          referenceType: 'WITHDRAWAL',
+          referenceType: DiscrepancyRefType.WITHDRAWAL,
           referenceId: target.id,
           userId: target.userId,
-          discrepancyType: 'PAYOUT_PAYLOAD_MISMATCH',
+          discrepancyType: DiscrepancyType.PAYOUT_PAYLOAD_MISMATCH,
           amount: target.amount,
           currency: expectedCurrency,
           providerPayload: {
@@ -1473,7 +1514,7 @@ export class WithdrawalService {
             status: params.status,
             providerRequestId: target.providerRequestId,
           },
-          status: 'OPEN',
+          status: DiscrepancyStatus.OPEN,
         })
         .onConflictDoNothing({
           target: [
@@ -1484,14 +1525,14 @@ export class WithdrawalService {
         });
 
       if (
-        target.status === 'DISPATCHING' ||
-        target.status === 'PROCESSING' ||
-        target.status === 'MANUAL_REVIEW'
+        target.status === WithdrawalStatus.DISPATCHING ||
+        target.status === WithdrawalStatus.PROCESSING ||
+        target.status === WithdrawalStatus.MANUAL_REVIEW
       ) {
         const [escalated] = await tx
           .update(withdrawals)
           .set({
-            status: 'MANUAL_REVIEW',
+            status: WithdrawalStatus.MANUAL_REVIEW,
             leaseUntil: null,
             nextPollAt: null,
             version: sql`${withdrawals.version} + 1`,
@@ -1502,19 +1543,22 @@ export class WithdrawalService {
         return escalated ?? target;
       }
 
-      if (target.status === 'FAILED') {
+      if (target.status === WithdrawalStatus.FAILED) {
         await tx
           .update(financialDiscrepancies)
-          .set({ status: 'RESOLVED' })
+          .set({ status: DiscrepancyStatus.RESOLVED })
           .where(
             and(
-              eq(financialDiscrepancies.referenceType, 'WITHDRAWAL'),
+              eq(
+                financialDiscrepancies.referenceType,
+                DiscrepancyRefType.WITHDRAWAL,
+              ),
               eq(financialDiscrepancies.referenceId, target.id),
               eq(
                 financialDiscrepancies.discrepancyType,
-                'LATE_SUCCESS_VERIFICATION',
+                DiscrepancyType.LATE_SUCCESS_VERIFICATION,
               ),
-              eq(financialDiscrepancies.status, 'OPEN'),
+              eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN),
             ),
           );
         const [halted] = await tx

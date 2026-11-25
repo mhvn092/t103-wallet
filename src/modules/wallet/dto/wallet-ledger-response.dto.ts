@@ -1,4 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
+import {
+  AccountType,
+  LedgerDirection,
+  LedgerRefType,
+  LedgerTxType,
+} from '../../../common/enums/domain.enums.js';
 import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
 
 class WalletLedgerItemDto {
@@ -8,17 +14,17 @@ class WalletLedgerItemDto {
   @ApiProperty({ format: 'uuid' })
   transactionId!: string;
 
-  @ApiProperty({ example: 'DEPOSIT' })
-  type!: string;
+  @ApiProperty({ enum: LedgerTxType, example: LedgerTxType.DEPOSIT })
+  type!: LedgerTxType;
 
   @ApiProperty({ enum: CURRENCIES, example: 'IRT' })
   currency!: Currency;
 
-  @ApiProperty({ example: 'AVAILABLE' })
-  accountType!: string;
+  @ApiProperty({ enum: AccountType, example: AccountType.AVAILABLE })
+  accountType!: AccountType;
 
-  @ApiProperty({ enum: ['DEBIT', 'CREDIT'], example: 'CREDIT' })
-  direction!: string;
+  @ApiProperty({ enum: LedgerDirection, example: LedgerDirection.CREDIT })
+  direction!: LedgerDirection;
 
   @ApiProperty({ example: '500000' })
   amount!: string;
@@ -26,8 +32,8 @@ class WalletLedgerItemDto {
   @ApiProperty({ type: String, nullable: true, example: '500000' })
   balanceAfter!: string | null;
 
-  @ApiProperty({ example: 'DEPOSIT' })
-  referenceType!: string;
+  @ApiProperty({ enum: LedgerRefType, example: LedgerRefType.DEPOSIT })
+  referenceType!: LedgerRefType;
 
   @ApiProperty({ format: 'uuid' })
   referenceId!: string;

@@ -6,6 +6,7 @@ import type { App } from 'supertest/types.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+import { Currency } from '../src/common/enums/domain.enums.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
 import {
@@ -62,7 +63,7 @@ describe('100-Concurrency PostgreSQL Lock & Limit Correctness (Integration)', ()
       },
       body: JSON.stringify({
         userId: params.userId,
-        currency: 'IRT',
+        currency: Currency.IRT,
         amount: params.amount,
         destination: VALID_IBAN,
       }),
@@ -83,7 +84,7 @@ describe('100-Concurrency PostgreSQL Lock & Limit Correctness (Integration)', ()
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: 'IRT',
+      currency: Currency.IRT,
       amount: '1000000',
       idempotencyKey: `fund-bal-${faker.string.uuid()}`,
     });
@@ -109,7 +110,7 @@ describe('100-Concurrency PostgreSQL Lock & Limit Correctness (Integration)', ()
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletRes.body.balances[0]).toEqual({
-      currency: 'IRT',
+      currency: Currency.IRT,
       available: '0',
       locked: '1000000',
       receivable: '0',
@@ -123,7 +124,7 @@ describe('100-Concurrency PostgreSQL Lock & Limit Correctness (Integration)', ()
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: 'IRT',
+      currency: Currency.IRT,
       amount: '500000000',
       idempotencyKey: `fund-lim-${faker.string.uuid()}`,
     });
@@ -149,7 +150,7 @@ describe('100-Concurrency PostgreSQL Lock & Limit Correctness (Integration)', ()
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletRes.body.balances[0]).toEqual({
-      currency: 'IRT',
+      currency: Currency.IRT,
       available: '300000000',
       locked: '200000000',
       receivable: '0',
@@ -171,7 +172,7 @@ describe('100-Concurrency PostgreSQL Lock & Limit Correctness (Integration)', ()
     await fundUserViaAdjustment({
       app,
       userId,
-      currency: 'IRT',
+      currency: Currency.IRT,
       amount: '100000',
       idempotencyKey: `fund-idem-${faker.string.uuid()}`,
     });
@@ -197,7 +198,7 @@ describe('100-Concurrency PostgreSQL Lock & Limit Correctness (Integration)', ()
       .get(`/wallets/${userId}`)
       .expect(200);
     expect(walletRes.body.balances[0]).toEqual({
-      currency: 'IRT',
+      currency: Currency.IRT,
       available: '0',
       locked: '100000',
       receivable: '0',

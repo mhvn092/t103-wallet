@@ -15,6 +15,21 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import {
+  DiscrepancyStatus,
+  OutboxStatus,
+} from '../../common/enums/domain.enums.js';
+import {
+  currencyEnum,
+  depositStatusEnum,
+  discrepancyRefTypeEnum,
+  discrepancyStatusEnum,
+  discrepancyTypeEnum,
+  idempotencyStatusEnum,
+  outboxEventTypeEnum,
+  outboxStatusEnum,
+  withdrawalStatusEnum,
+} from './enums.js';
 
 function auditTimestamps() {
   return {
@@ -33,7 +48,7 @@ export const idempotencyKeys = pgTable(
     scope: text('scope').notNull(),
     key: text('key').notNull(),
     requestHash: text('request_hash').notNull(),
-    status: text('status').notNull(), // 'IN_PROGRESS' | 'COMPLETED'
+    status: idempotencyStatusEnum('status').notNull(),
     responseStatus: integer('response_status'),
     responseBody: jsonb('response_body').$type<unknown>(),
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
@@ -66,7 +81,7 @@ export const deposits = pgTable(
     pspToken: text('psp_token').unique(),
     pspRefId: text('psp_ref_id'),
     paymentUrl: text('payment_url'),
-    status: text('status').notNull(), // 'INITIATED' | 'AWAITING_PAYMENT' | 'VERIFYING' | 'SUCCEEDED' | 'FAILED'
+    status: depositStatusEnum('status').notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     nextPollAt: timestamp('next_poll_at', { withTimezone: true }),
     verifiedAt: timestamp('verified_at', { withTimezone: true }),
@@ -80,11 +95,9 @@ export const deposits = pgTable(
     uniqueIndex('deposits_psp_ref_uq')
       .on(t.pspRefId)
       .where(sql`${t.pspRefId} IS NOT NULL`),
-    // Migration 0004 attaches INCLUDE (id) for index-only poll claiming
     index('deposits_poll_idx')
       .on(t.nextPollAt)
       .where(sql`${t.status} <> 'SUCCEEDED' AND ${t.nextPollAt} IS NOT NULL`),
-    // Migration 0004 attaches INCLUDE (id, psp_ref_id, verified_amount) for reconciliation scans
     index('deposits_verified_at_idx')
       .on(t.verifiedAt)
       .where(sql`${t.status} = 'SUCCEEDED'`),
@@ -96,7 +109,7 @@ export const withdrawals = pgTable(
   {
     id: uuid('id').primaryKey(),
     userId: text('user_id').notNull(),
-    currency: text('currency').notNull(), // 'IRT' | 'USDT'
+    currency: currencyEnum('currency').notNull(),
     amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
     fee: numeric('fee', { precision: 38, scale: 0 }).notNull(),
     fxRateIrt: numeric('fx_rate_irt', { precision: 38, scale: 0 }).notNull(),
@@ -111,7 +124,7 @@ export const withdrawals = pgTable(
       .notNull()
       .unique(),
     providerRefId: text('provider_ref_id'),
-    status: text('status').notNull(), // 'PENDING_DISPATCH' | 'DISPATCHING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'MANUAL_REVIEW'
+    status: withdrawalStatusEnum('status').notNull(),
     failureReason: text('failure_reason'),
     terminalReturn: boolean('terminal_return').notNull().default(false),
     lateSuccessConflict: boolean('late_success_conflict')
@@ -125,7 +138,6 @@ export const withdrawals = pgTable(
     ...auditTimestamps(),
   },
   (t) => [
-    // Migration 0004 attaches INCLUDE (status, lease_until)
     index('withdrawals_dispatch_idx')
       .on(t.createdAt)
       .where(sql`${t.status} IN ('PENDING_DISPATCH', 'DISPATCHING')`),
@@ -134,16 +146,13 @@ export const withdrawals = pgTable(
       .where(
         sql`${t.status} IN ('PROCESSING', 'MANUAL_REVIEW', 'FAILED') AND ${t.nextPollAt} IS NOT NULL`,
       ),
-    index('withdrawals_manual_review_idx')
-      .on(t.id)
-      .where(sql`${t.status} = 'MANUAL_REVIEW'`),
   ],
 );
 
 export const adjustments = pgTable('adjustments', {
   id: uuid('id').primaryKey(),
   userId: text('user_id').notNull(),
-  currency: text('currency').notNull(),
+  currency: currencyEnum('currency').notNull(),
   amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
   reason: text('reason').notNull(),
   operatorId: text('operator_id').notNull(),
@@ -156,30 +165,27 @@ export const financialDiscrepancies = pgTable(
   'financial_discrepancies',
   {
     id: uuid('id').primaryKey(),
-    referenceType: text('reference_type').notNull(), // 'DEPOSIT' | 'WITHDRAWAL'
+    referenceType: discrepancyRefTypeEnum('reference_type').notNull(),
     referenceId: uuid('reference_id').notNull(),
     userId: text('user_id').notNull(),
-    discrepancyType: text('discrepancy_type').notNull(), // 'AMOUNT_MISMATCH' | 'ORDER_ID_MISMATCH' | 'PAYOUT_PAYLOAD_MISMATCH' | 'LATE_SUCCESS_CONFLICT'
+    discrepancyType: discrepancyTypeEnum('discrepancy_type').notNull(),
     amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
-    currency: text('currency').notNull(),
+    currency: currencyEnum('currency').notNull(),
     providerPayload: jsonb('provider_payload')
       .$type<Record<string, unknown>>()
       .notNull()
       .default({}),
-    status: text('status').notNull().default('OPEN'),
+    status: discrepancyStatusEnum('status')
+      .notNull()
+      .default(DiscrepancyStatus.OPEN),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (t) => [
     index('financial_discrepancies_open_idx')
-      .on(t.id)
-      .where(sql`${t.status} = 'OPEN'`),
-    index('financial_discrepancies_open_receivable_idx')
       .on(t.userId, t.currency)
-      .where(
-        sql`${t.status} = 'OPEN' AND ${t.discrepancyType} = 'LATE_SUCCESS_CONFLICT'`,
-      ),
+      .where(sql`${t.status} = 'OPEN'`),
     uniqueIndex('financial_discrepancies_ref_type_uq').on(
       t.referenceType,
       t.referenceId,
@@ -192,7 +198,7 @@ export const transfers = pgTable('transfers', {
   id: uuid('id').primaryKey(),
   fromUserId: text('from_user_id').notNull(),
   toUserId: text('to_user_id').notNull(),
-  currency: text('currency').notNull(),
+  currency: currencyEnum('currency').notNull(),
   amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
@@ -203,9 +209,9 @@ export const outboxEvents = pgTable(
   'outbox_events',
   {
     id: uuid('id').primaryKey(),
-    eventType: text('event_type').notNull(),
+    eventType: outboxEventTypeEnum('event_type').notNull(),
     payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
-    status: text('status').notNull().default('PENDING'), // 'PENDING' | 'PUBLISHED'
+    status: outboxStatusEnum('status').notNull().default(OutboxStatus.PENDING),
     retryCount: integer('retry_count').notNull().default(0),
     lastError: text('last_error'),
     leaseUntil: timestamp('lease_until', { withTimezone: true }),
@@ -218,13 +224,9 @@ export const outboxEvents = pgTable(
     publishedAt: timestamp('published_at', { withTimezone: true }),
   },
   (t) => [
-    // Migration 0004 attaches INCLUDE (lease_until, created_at)
     index('outbox_pending_idx')
       .on(t.nextRetryAt)
       .where(sql`${t.status} = 'PENDING'`),
-    index('outbox_published_retention_idx')
-      .on(t.publishedAt)
-      .where(sql`${t.status} = 'PUBLISHED'`),
   ],
 );
 
@@ -237,10 +239,7 @@ export const processedEvents = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [
-    primaryKey({ columns: [t.eventId, t.consumerName] }),
-    index('processed_events_processed_at_idx').on(t.processedAt),
-  ],
+  (t) => [primaryKey({ columns: [t.eventId, t.consumerName] })],
 );
 
 export const systemControls = pgTable('system_controls', {

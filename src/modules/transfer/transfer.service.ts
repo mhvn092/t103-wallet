@@ -1,4 +1,10 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import {
+  LedgerDirection,
+  LedgerRefType,
+  LedgerTxType,
+  UserAccountType,
+} from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -32,12 +38,12 @@ export class TransferService {
     const fromSpec = {
       userId: dto.fromUserId,
       currency: dto.currency,
-      accountType: 'AVAILABLE' as const,
+      accountType: UserAccountType.AVAILABLE,
     };
     const toSpec = {
       userId: dto.toUserId,
       currency: dto.currency,
-      accountType: 'AVAILABLE' as const,
+      accountType: UserAccountType.AVAILABLE,
     };
 
     await this._walletService.ensureUserScaffold({
@@ -115,8 +121,8 @@ export class TransferService {
         }
 
         await this._ledgerService.postTransaction(tx, {
-          type: 'TRANSFER',
-          referenceType: 'TRANSFER',
+          type: LedgerTxType.TRANSFER,
+          referenceType: LedgerRefType.TRANSFER,
           referenceId: transferId,
           description: `Internal P2P transfer from ${dto.fromUserId} to ${dto.toUserId}`,
           metadata: {
@@ -127,12 +133,12 @@ export class TransferService {
           postings: [
             {
               account: fromAccount,
-              direction: 'DEBIT',
+              direction: LedgerDirection.DEBIT,
               amount: amountMinor,
             },
             {
               account: toAccount,
-              direction: 'CREDIT',
+              direction: LedgerDirection.CREDIT,
               amount: amountMinor,
             },
           ],

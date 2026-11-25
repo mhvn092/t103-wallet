@@ -1,4 +1,11 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import {
+  LedgerDirection,
+  LedgerRefType,
+  LedgerTxType,
+  SystemOwnerId,
+  UserAccountType,
+} from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
@@ -33,7 +40,7 @@ export class AdjustmentService {
     const availableSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: 'AVAILABLE' as const,
+      accountType: UserAccountType.AVAILABLE,
     };
 
     // Pre-ensure outside TX1 to avoid rollback bloat or XID deadlocks
@@ -59,7 +66,7 @@ export class AdjustmentService {
           );
           const opsAccount = await this._walletService.getSystemAccount(
             tx,
-            'OPS_ADJUSTMENT',
+            SystemOwnerId.OPS_ADJUSTMENT,
             dto.currency,
           );
 
@@ -85,8 +92,8 @@ export class AdjustmentService {
           }
 
           await this._ledgerService.postTransaction(tx, {
-            type: 'OPS_ADJ',
-            referenceType: 'ADJUSTMENT',
+            type: LedgerTxType.OPS_ADJ,
+            referenceType: LedgerRefType.ADJUSTMENT,
             referenceId: adjustmentId,
             description: `Manual ops adjustment: ${dto.reason}`,
             metadata: {
@@ -96,12 +103,12 @@ export class AdjustmentService {
             postings: [
               {
                 account: opsAccount,
-                direction: 'DEBIT',
+                direction: LedgerDirection.DEBIT,
                 amount: amountMinor,
               },
               {
                 account: userAvailable,
-                direction: 'CREDIT',
+                direction: LedgerDirection.CREDIT,
                 amount: amountMinor,
               },
             ],

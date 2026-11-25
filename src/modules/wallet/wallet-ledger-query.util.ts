@@ -1,9 +1,6 @@
-export const WALLET_ACCOUNT_FILTERS = [
-  'AVAILABLE',
-  'LOCKED',
-  'RECEIVABLE',
-  'ALL',
-] as const;
+import { WalletAccountFilter } from '../../common/enums/domain.enums.js';
+
+export const WALLET_ACCOUNT_FILTERS = Object.values(WalletAccountFilter);
 
 export const MAX_PG_BIGINT = 9_223_372_036_854_775_807n;
 

@@ -1841,6 +1841,17 @@
           },
           "type": {
             "type": "string",
+            "enum": [
+              "DEPOSIT",
+              "WD_HOLD",
+              "WD_SETTLE",
+              "WD_RELEASE",
+              "WD_RETURN",
+              "WD_LATE_SUCCESS",
+              "OPS_ADJ",
+              "RECEIVABLE_SETTLE",
+              "TRANSFER"
+            ],
             "example": "DEPOSIT"
           },
           "currency": {
@@ -1853,6 +1864,14 @@
           },
           "accountType": {
             "type": "string",
+            "enum": [
+              "AVAILABLE",
+              "LOCKED",
+              "RECEIVABLE",
+              "CLEARING",
+              "ADJUSTMENT",
+              "REVENUE"
+            ],
             "example": "AVAILABLE"
           },
           "direction": {
@@ -1874,6 +1893,12 @@
           },
           "referenceType": {
             "type": "string",
+            "enum": [
+              "DEPOSIT",
+              "WITHDRAWAL",
+              "ADJUSTMENT",
+              "TRANSFER"
+            ],
             "example": "DEPOSIT"
           },
           "referenceId": {
@@ -2186,6 +2211,13 @@
           },
           "status": {
             "type": "string",
+            "enum": [
+              "INITIATED",
+              "AWAITING_PAYMENT",
+              "VERIFYING",
+              "SUCCEEDED",
+              "FAILED"
+            ],
             "example": "AWAITING_PAYMENT"
           },
           "paymentUrl": {
@@ -2321,6 +2353,13 @@
           },
           "status": {
             "type": "string",
+            "enum": [
+              "INITIATED",
+              "AWAITING_PAYMENT",
+              "VERIFYING",
+              "SUCCEEDED",
+              "FAILED"
+            ],
             "example": "SUCCEEDED"
           }
         },
@@ -2518,6 +2557,14 @@
           },
           "status": {
             "type": "string",
+            "enum": [
+              "PENDING_DISPATCH",
+              "DISPATCHING",
+              "PROCESSING",
+              "SUCCEEDED",
+              "FAILED",
+              "MANUAL_REVIEW"
+            ],
             "example": "SUCCEEDED"
           }
         },
@@ -2727,6 +2774,9 @@
         "properties": {
           "type": {
             "type": "string",
+            "enum": [
+              "MATCHED_ADJACENT_DAY"
+            ],
             "example": "MATCHED_ADJACENT_DAY"
           },
           "reference": {

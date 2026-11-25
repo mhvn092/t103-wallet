@@ -2,10 +2,19 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { eq, sql } from 'drizzle-orm';
 import { PAUSED_WITHDRAWALS_CONTROL_KEY } from '../../common/constants/system-controls.constants.js';
+import {
+  Currency,
+  DiscrepancyStatus,
+  LedgerDirection,
+  LedgerRefType,
+  LedgerTxType,
+  OutboxStatus,
+  UserAccountType,
+  WithdrawalStatus,
+} from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import {
-  type Currency,
   formatMinorToApi,
   parseAmountToMinor,
 } from '../../common/utils/money.util.js';
@@ -47,21 +56,22 @@ export class InternalOpsService {
     operatorId: string;
   }): Promise<IdempotentExecutionResult<ReceivableSettleResponseDto>> {
     const { dto } = params;
-    const otherCcy: Currency = dto.currency === 'IRT' ? 'USDT' : 'IRT';
+    const otherCcy =
+      dto.currency === Currency.IRT ? Currency.USDT : Currency.IRT;
     const availableSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: 'AVAILABLE' as const,
+      accountType: UserAccountType.AVAILABLE,
     };
     const receivableSpec = {
       userId: dto.userId,
       currency: dto.currency,
-      accountType: 'RECEIVABLE' as const,
+      accountType: UserAccountType.RECEIVABLE,
     };
     const otherReceivableSpec = {
       userId: dto.userId,
       currency: otherCcy,
-      accountType: 'RECEIVABLE' as const,
+      accountType: UserAccountType.RECEIVABLE,
     };
 
     await this._walletService.ensureUserScaffold({
@@ -116,8 +126,8 @@ export class InternalOpsService {
           const settlementId = generateUuidV7();
 
           await this._ledgerService.postTransaction(tx, {
-            type: 'RECEIVABLE_SETTLE',
-            referenceType: 'ADJUSTMENT',
+            type: LedgerTxType.RECEIVABLE_SETTLE,
+            referenceType: LedgerRefType.ADJUSTMENT,
             referenceId: settlementId,
             description: `Manual/ops settlement of ${dto.currency} receivable balance`,
             metadata: {
@@ -128,12 +138,12 @@ export class InternalOpsService {
             postings: [
               {
                 account: userAvailable,
-                direction: 'DEBIT',
+                direction: LedgerDirection.DEBIT,
                 amount: settleAmount,
               },
               {
                 account: userReceivable,
-                direction: 'CREDIT',
+                direction: LedgerDirection.CREDIT,
                 amount: settleAmount,
               },
             ],
@@ -261,15 +271,15 @@ export class InternalOpsService {
       this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(financialDiscrepancies)
-        .where(eq(financialDiscrepancies.status, 'OPEN')),
+        .where(eq(financialDiscrepancies.status, DiscrepancyStatus.OPEN)),
       this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(withdrawals)
-        .where(eq(withdrawals.status, 'MANUAL_REVIEW')),
+        .where(eq(withdrawals.status, WithdrawalStatus.MANUAL_REVIEW)),
       this._databaseService.db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(outboxEvents)
-        .where(eq(outboxEvents.status, 'PENDING')),
+        .where(eq(outboxEvents.status, OutboxStatus.PENDING)),
       this._getCachedBalanceDriftAccounts(),
       this._databaseService.db
         .select({ value: systemControls.value })
@@ -295,10 +305,12 @@ export class InternalOpsService {
   }
 
   formatPrometheusMetrics(metrics: InternalMetricsResponseDto): string {
-    const irtPaused = metrics.pausedWithdrawalCurrencies.includes('IRT')
+    const irtPaused = metrics.pausedWithdrawalCurrencies.includes(Currency.IRT)
       ? 1
       : 0;
-    const usdtPaused = metrics.pausedWithdrawalCurrencies.includes('USDT')
+    const usdtPaused = metrics.pausedWithdrawalCurrencies.includes(
+      Currency.USDT,
+    )
       ? 1
       : 0;
 

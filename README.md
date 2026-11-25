@@ -4,12 +4,43 @@ A crash-safe **NestJS 12 (ESM) + PostgreSQL 18 + Drizzle ORM + RabbitMQ** modula
 
 ---
 
+## Development Approach & Core Design Intuition
+
+To be upfront: a large portion of the specification text, boilerplate, implementation code, and automated review passes in this repository were generated with AI assistance. However, the core architecture, data model, concurrency strategy, and failure-handling philosophy were designed manually upfront, and the project followed a deliberate human-in-the-loop workflow rather than one-shot prompting.
+
+### Core Architectural Intuition
+
+Before any spec or code was written, the solution was anchored on a few concrete ideas:
+
+1. **Header/Item Ledger + Action-Specific Tables:** Separate immutable accounting from operational workflows. Accounting lives in a transaction header (`ledger_transactions`) and line items (`ledger_items`), while each product action (`deposits`, `withdrawals`, `transfers`, `adjustments`, `financial_discrepancies`) has its own table and state machine referencing the ledger.
+2. **PostgreSQL as the Single Source of Truth:** Avoid Redis, external distributed locks, or separate balance caches. Keeping balances, daily quotas, idempotency receipts, outbox events, and row locks inside one ACID database eliminates cache/DB drift and split-brain failure modes.
+3. **Deadlock-Free Pessimistic Locking via Key-Holder Rows:** Serialize concurrent mutations with exclusive row locks (`SELECT ... FOR UPDATE`) acquired in a deterministic canonical order, using dedicated key-holder rows/tables (`idempotency_keys`, `user_daily_limits`, `user_restrictions`, and `accounts` sorted by `id ASC` after lazy row creation) so concurrent requests cannot deadlock.
+4. **Database-Enforced Data Integrity:** Never rely solely on application code to protect money. Enforce non-negative user balances (`CHECK`), append-only ledger history, no direct balance edits, and atomic balance projection (`BEFORE INSERT` triggers) directly inside PostgreSQL.
+5. **Pessimistic Handling of Outbound & Transient Errors:** Assume external HTTP calls and webhooks will fail, time out, duplicate, or arrive out of order. Commit state before calling external providers, never auto-fail ambiguous outbound payouts on timeouts, verify outcomes via provider inquiry (`GET`) when uncertain, and escalate unresolvable states (`MANUAL_REVIEW` and `financial_discrepancies`) to an operator instead of guessing.
+
+### Development Workflow
+
+1. **Requirement Breakdown & Initial Intuition:** Study the requirements and form a first-pass mental model of the core solution and edge cases.
+2. **Core Solution Design:** Nail down the primary ideas above (ledger header/items, action tables, Postgres-only state, exclusive locks with key-holder ordering, DB constraints/triggers, and pessimistic outbound error handling with inquiry/operator escalation).
+3. **AI-Assisted Edge-Case Review:** Review the proposed architecture with AI to stress-test assumptions, surface concurrency/failure edge cases, and refine how each one is handled.
+4. **Base DB, API & Module Design:** Lock in the base database schema, API contracts (aligned with the requirement spec), and NestJS module boundaries.
+5. **Spec Generation:** Have the AI write the detailed design specification (`docs/design.md`) based on those decisions.
+6. **Iterative Spec Review (First Commit):** Review and refine the specification until it is solid — that reviewed spec formed the baseline commit.
+7. **Implementation:** Have the AI generate the codebase and tests against the agreed specification.
+8. **Automated AI Review Loop:** Run repeated AI review-and-fix passes until the AI reviewer reports no remaining issues, avoiding manual back-and-forth on mechanical bugs.
+9. **Manual Code Review:** Perform a human review of the codebase once the AI review loop settles.
+10. **End-to-End Chaos Testing:** Run the full stack (PostgreSQL, RabbitMQ, and the simulator in hostile mode) and have the AI execute full E2E tests and stress/break flows using its connected tools/MCPs.
+11. **Manual Testing:** Manually test the running system end-to-end.
+12. **Push:** Finalize and push the verified project.
+
+---
+
 ## Key Architectural Guarantees
 
 - **Zero Floating-Point Arithmetic:** All money uses `NUMERIC(38,0)` minor units in PostgreSQL and exact `bigint` values in TypeScript (`1 IRT = 1 Toman`, `1 USDT = 1,000,000 micro-USDT`), bounded at `MAX_AMOUNT_MINOR = 10^15` (`400 INVALID_REQUEST` on overflow). `IRT × 10 <-> IRR` translation occurs exclusively at external PSP/Payout boundaries (`ProvidersModule`).
 - **Database-Enforced Double-Entry Integrity:**
   - `trg_accounts_no_direct_balance_update` blocks direct `UPDATE accounts.balance`; `trg_accounts_immutable_meta` forbids non-zero `USER` account `INSERT`s and immutable metadata/`normal_side` changes; `BEFORE TRUNCATE` triggers protect append-only `ledger_transactions` and `ledger_items`.
-  - Balances mutate **only** inside `BEFORE INSERT ON ledger_items` in the exact same ACID transaction as the balanced `ledger_transactions` commit (dual `DEFERRABLE` commit triggers on **both** `ledger_transactions` and `ledger_items` enforce per-currency `SUM(DEBIT) = SUM(CREDIT)` and `COUNT(*) >= 2`, blocking `SET CONSTRAINTS ... IMMEDIATE` bypasses).
+  - Balances mutate **only** inside `BEFORE INSERT ON ledger_items` in the exact same ACID transaction (`tx_xid = pg_current_xact_id()`) while `LedgerService` validates `>= 2` legs and per-currency `SUM(DEBIT) = SUM(CREDIT)` before inserting.
   - `CHECK ((owner_type = 'SYSTEM' AND balance IS NULL) OR (owner_type = 'USER' AND balance >= 0))` makes negative user balances mathematically impossible.
 - **Deadlock-Free Concurrency, Pre-Validation User-Scoped Idempotency & Daily Cap:** `IdempotencyPreCheckGuard` hashes raw payloads (`422 IDEMPOTENCY_KEY_REUSED` before `ValidationPipe`), Statement-#1 `idempotency_keys` claims (`PK(scope, key)` with user IDs in customer scopes, cached domain `400`/`422` responses, DB-clock `NOW()` `lease_version` fencing on `/deposits`, and `Idempotency-Key` on `/cancel` and `/resolve`) precede Canonical Lock Order (`user_daily_limits` -> `user_restrictions` -> `USER` `accounts` ordered by `id ASC`). `100` concurrent withdrawals serialize cleanly against balances and the `200,000,000` IRT daily quota (`Asia/Tehran` `00:00` boundary).
 - **Chaos & Crash Resilience (`SIM_CHAOS=hostile` Verified):**
@@ -65,8 +96,6 @@ Errors consistently follow `{"code": "...", "message": "..."}`.
 Set `APP_ENV` to `dev`, `stage`, or `production` for deployed environments. Internal routes always require `INTERNAL_API_KEY` outside `APP_ENV=local`. Local `docker-compose.yml` sets `APP_ENV=local` and `ALLOW_UNAUTHENTICATED_INTERNAL_OPS=true` so Appendix A endpoints work out of the box unless `INTERNAL_API_KEY` is configured.
 
 Customer routes in deployed environments require a trusted gateway. Configure `WALLET_GATEWAY_KEY` with a separate secret of at least 32 characters. The gateway must authenticate the customer, discard client-supplied identity headers, and forward the verified subject in `X-Wallet-User-Id` with the shared secret in `X-Wallet-Gateway-Key`. Limit direct wallet service access to the gateway and trusted service callers.
-
-Before applying migration `0006`, drain old API replicas and let in-flight deposit creation finish so legacy leases can complete in their original scope. The migration moves completed receipts into user scopes. A duplicate existing PSP reference blocks the unique index from being created until the underlying records are reconciled.
 
 ---
 

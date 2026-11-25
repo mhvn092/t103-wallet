@@ -1,11 +1,20 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import {
+  Currency,
+  DiscrepancyRefType,
+  DiscrepancyStatus,
+  DiscrepancyType,
+  LedgerDirection,
+  LedgerRefType,
+  LedgerTxType,
+  SystemOwnerId,
+  UserAccountType,
+  WithdrawalStatus,
+} from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
-import {
-  type Currency,
-  formatMinorToApi,
-} from '../../common/utils/money.util.js';
+import { formatMinorToApi } from '../../common/utils/money.util.js';
 import { generateUuidV7 } from '../../common/utils/uuidv7.util.js';
 import type { DbTransaction } from '../../database/database.types.js';
 import {
@@ -69,7 +78,7 @@ export class WithdrawalLedgerService {
         quotaReleased: false,
         destination: params.normalizedDest,
         providerRequestId: `wd_${withdrawalId}`,
-        status: 'PENDING_DISPATCH',
+        status: WithdrawalStatus.PENDING_DISPATCH,
         terminalReturn: false,
         lateSuccessConflict: false,
         version: 1n,
@@ -85,8 +94,8 @@ export class WithdrawalLedgerService {
     }
 
     await this._ledgerService.postTransaction(tx, {
-      type: 'WD_HOLD',
-      referenceType: 'WITHDRAWAL',
+      type: LedgerTxType.WD_HOLD,
+      referenceType: LedgerRefType.WITHDRAWAL,
       referenceId: withdrawalId,
       description: `Withdrawal hold for ${params.currency} payout`,
       metadata: {
@@ -97,12 +106,12 @@ export class WithdrawalLedgerService {
       postings: [
         {
           account: params.userAvailable,
-          direction: 'DEBIT',
+          direction: LedgerDirection.DEBIT,
           amount: totalHold,
         },
         {
           account: params.userLocked,
-          direction: 'CREDIT',
+          direction: LedgerDirection.CREDIT,
           amount: totalHold,
         },
       ],
@@ -120,11 +129,11 @@ export class WithdrawalLedgerService {
       reason?: string;
     },
   ): Promise<WithdrawalEntity> {
-    const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
+    const ccy = locked.currency;
     const lockedSpec = {
       userId: locked.userId,
       currency: ccy,
-      accountType: 'LOCKED' as const,
+      accountType: UserAccountType.LOCKED,
     };
 
     const lockedAccounts = await this._walletService.lockUserAccountsCanonical(
@@ -137,7 +146,7 @@ export class WithdrawalLedgerService {
     );
     const payoutClearing = await this._walletService.getSystemAccount(
       tx,
-      'PAYOUT_CLEARING',
+      SystemOwnerId.PAYOUT_CLEARING,
       ccy,
     );
 
@@ -146,12 +155,12 @@ export class WithdrawalLedgerService {
     const postings: LedgerPostingLine[] = [
       {
         account: userLocked,
-        direction: 'DEBIT',
+        direction: LedgerDirection.DEBIT,
         amount: amountMinor + feeMinor,
       },
       {
         account: payoutClearing,
-        direction: 'CREDIT',
+        direction: LedgerDirection.CREDIT,
         amount: amountMinor,
       },
     ];
@@ -159,20 +168,20 @@ export class WithdrawalLedgerService {
     if (feeMinor > 0n) {
       const feeRevenue = await this._walletService.getSystemAccount(
         tx,
-        'FEE_REVENUE',
+        SystemOwnerId.FEE_REVENUE,
         ccy,
       );
       postings.push({
         account: feeRevenue,
-        direction: 'CREDIT',
+        direction: LedgerDirection.CREDIT,
         amount: feeMinor,
       });
     }
 
     const resolvedRef = opts.providerRefId ?? locked.providerRefId;
     await this._ledgerService.postTransaction(tx, {
-      type: 'WD_SETTLE',
-      referenceType: 'WITHDRAWAL',
+      type: LedgerTxType.WD_SETTLE,
+      referenceType: LedgerRefType.WITHDRAWAL,
       referenceId: locked.id,
       description: opts.operatorId
         ? `Withdrawal resolved as SUCCEEDED by ${opts.operatorId} (${locked.providerRequestId})`
@@ -187,7 +196,7 @@ export class WithdrawalLedgerService {
     });
 
     return this._finishWithdrawal(tx, locked, {
-      status: 'SUCCEEDED',
+      status: WithdrawalStatus.SUCCEEDED,
       providerRefId: resolvedRef,
     });
   }
@@ -201,16 +210,16 @@ export class WithdrawalLedgerService {
       operatorId?: string;
     },
   ): Promise<WithdrawalEntity> {
-    const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
+    const ccy = locked.currency;
     const availableSpec = {
       userId: locked.userId,
       currency: ccy,
-      accountType: 'AVAILABLE' as const,
+      accountType: UserAccountType.AVAILABLE,
     };
     const lockedSpec = {
       userId: locked.userId,
       currency: ccy,
-      accountType: 'LOCKED' as const,
+      accountType: UserAccountType.LOCKED,
     };
 
     await this._walletService.lockDailyLimit(
@@ -234,8 +243,8 @@ export class WithdrawalLedgerService {
 
     const totalHold = BigInt(locked.amount) + BigInt(locked.fee);
     await this._ledgerService.postTransaction(tx, {
-      type: 'WD_RELEASE',
-      referenceType: 'WITHDRAWAL',
+      type: LedgerTxType.WD_RELEASE,
+      referenceType: LedgerRefType.WITHDRAWAL,
       referenceId: locked.id,
       description: `Release locked funds for failed/cancelled withdrawal (${opts.reason})`,
       metadata: {
@@ -244,8 +253,16 @@ export class WithdrawalLedgerService {
         ...(opts.operatorId ? { operatorId: opts.operatorId } : {}),
       },
       postings: [
-        { account: userLocked, direction: 'DEBIT', amount: totalHold },
-        { account: userAvailable, direction: 'CREDIT', amount: totalHold },
+        {
+          account: userLocked,
+          direction: LedgerDirection.DEBIT,
+          amount: totalHold,
+        },
+        {
+          account: userAvailable,
+          direction: LedgerDirection.CREDIT,
+          amount: totalHold,
+        },
       ],
     });
 
@@ -259,7 +276,7 @@ export class WithdrawalLedgerService {
     }
 
     return this._finishWithdrawal(tx, locked, {
-      status: 'FAILED',
+      status: WithdrawalStatus.FAILED,
       failureReason: opts.reason,
       terminalReturn: locked.terminalReturn || opts.markTerminalReturn,
       quotaReleased: true,
@@ -271,22 +288,22 @@ export class WithdrawalLedgerService {
     locked: WithdrawalEntity,
     reason: string,
   ): Promise<WithdrawalEntity> {
-    const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
-    const otherCcy: Currency = ccy === 'IRT' ? 'USDT' : 'IRT';
+    const ccy = locked.currency;
+    const otherCcy = ccy === Currency.IRT ? Currency.USDT : Currency.IRT;
     const availableSpec = {
       userId: locked.userId,
       currency: ccy,
-      accountType: 'AVAILABLE' as const,
+      accountType: UserAccountType.AVAILABLE,
     };
     const receivableSpec = {
       userId: locked.userId,
       currency: ccy,
-      accountType: 'RECEIVABLE' as const,
+      accountType: UserAccountType.RECEIVABLE,
     };
     const otherReceivableSpec = {
       userId: locked.userId,
       currency: otherCcy,
-      accountType: 'RECEIVABLE' as const,
+      accountType: UserAccountType.RECEIVABLE,
     };
 
     await this._walletService.lockDailyLimit(
@@ -313,7 +330,7 @@ export class WithdrawalLedgerService {
     );
     const payoutClearing = await this._walletService.getSystemAccount(
       tx,
-      'PAYOUT_CLEARING',
+      SystemOwnerId.PAYOUT_CLEARING,
       ccy,
     );
 
@@ -326,38 +343,42 @@ export class WithdrawalLedgerService {
     const availableCredit = totalRefund - receivableCredit;
 
     const postings: LedgerPostingLine[] = [
-      { account: payoutClearing, direction: 'DEBIT', amount: amountMinor },
+      {
+        account: payoutClearing,
+        direction: LedgerDirection.DEBIT,
+        amount: amountMinor,
+      },
     ];
     if (feeMinor > 0n) {
       const feeRevenue = await this._walletService.getSystemAccount(
         tx,
-        'FEE_REVENUE',
+        SystemOwnerId.FEE_REVENUE,
         ccy,
       );
       postings.push({
         account: feeRevenue,
-        direction: 'DEBIT',
+        direction: LedgerDirection.DEBIT,
         amount: feeMinor,
       });
     }
     if (receivableCredit > 0n) {
       postings.push({
         account: userReceivable,
-        direction: 'CREDIT',
+        direction: LedgerDirection.CREDIT,
         amount: receivableCredit,
       });
     }
     if (availableCredit > 0n) {
       postings.push({
         account: userAvailable,
-        direction: 'CREDIT',
+        direction: LedgerDirection.CREDIT,
         amount: availableCredit,
       });
     }
 
     await this._ledgerService.postTransaction(tx, {
-      type: 'WD_RETURN',
-      referenceType: 'WITHDRAWAL',
+      type: LedgerTxType.WD_RETURN,
+      referenceType: LedgerRefType.WITHDRAWAL,
       referenceId: locked.id,
       description: `Bank reversal / return for withdrawal (${reason})`,
       metadata: {
@@ -387,7 +408,7 @@ export class WithdrawalLedgerService {
     }
 
     return this._finishWithdrawal(tx, locked, {
-      status: 'FAILED',
+      status: WithdrawalStatus.FAILED,
       failureReason: reason,
       terminalReturn: true,
       quotaReleased: true,
@@ -417,12 +438,12 @@ export class WithdrawalLedgerService {
       .from(ledgerTransactions)
       .where(
         and(
-          eq(ledgerTransactions.referenceType, 'WITHDRAWAL'),
+          eq(ledgerTransactions.referenceType, LedgerRefType.WITHDRAWAL),
           eq(ledgerTransactions.referenceId, withdrawalId),
           inArray(ledgerTransactions.type, [
-            'WD_SETTLE',
-            'WD_RETURN',
-            'WD_LATE_SUCCESS',
+            LedgerTxType.WD_SETTLE,
+            LedgerTxType.WD_RETURN,
+            LedgerTxType.WD_LATE_SUCCESS,
           ]),
         ),
       )
@@ -439,16 +460,16 @@ export class WithdrawalLedgerService {
       return locked;
     }
 
-    const ccy: Currency = locked.currency === 'USDT' ? 'USDT' : 'IRT';
+    const ccy = locked.currency;
     const availableSpec = {
       userId: locked.userId,
       currency: ccy,
-      accountType: 'AVAILABLE' as const,
+      accountType: UserAccountType.AVAILABLE,
     };
     const receivableSpec = {
       userId: locked.userId,
       currency: ccy,
-      accountType: 'RECEIVABLE' as const,
+      accountType: UserAccountType.RECEIVABLE,
     };
 
     // Strict Canonical Lock Order: withdrawals (locked) -> user_daily_limits -> user_restrictions -> accounts ASC
@@ -475,7 +496,7 @@ export class WithdrawalLedgerService {
     );
     const payoutClearing = await this._walletService.getSystemAccount(
       tx,
-      'PAYOUT_CLEARING',
+      SystemOwnerId.PAYOUT_CLEARING,
       ccy,
     );
 
@@ -491,38 +512,38 @@ export class WithdrawalLedgerService {
     if (clawback > 0n) {
       postings.push({
         account: userAvailable,
-        direction: 'DEBIT',
+        direction: LedgerDirection.DEBIT,
         amount: clawback,
       });
     }
     if (shortfall > 0n) {
       postings.push({
         account: userReceivable,
-        direction: 'DEBIT',
+        direction: LedgerDirection.DEBIT,
         amount: shortfall,
       });
     }
     postings.push({
       account: payoutClearing,
-      direction: 'CREDIT',
+      direction: LedgerDirection.CREDIT,
       amount: amountMinor,
     });
     if (feeMinor > 0n) {
       const feeRevenue = await this._walletService.getSystemAccount(
         tx,
-        'FEE_REVENUE',
+        SystemOwnerId.FEE_REVENUE,
         ccy,
       );
       postings.push({
         account: feeRevenue,
-        direction: 'CREDIT',
+        direction: LedgerDirection.CREDIT,
         amount: feeMinor,
       });
     }
 
     await this._ledgerService.postTransaction(tx, {
-      type: 'WD_LATE_SUCCESS',
-      referenceType: 'WITHDRAWAL',
+      type: LedgerTxType.WD_LATE_SUCCESS,
+      referenceType: LedgerRefType.WITHDRAWAL,
       referenceId: locked.id,
       description: `Late payout success conflict recovery (${locked.providerRequestId})`,
       metadata: {
@@ -547,7 +568,7 @@ export class WithdrawalLedgerService {
       tx,
       locked,
       {
-        status: 'SUCCEEDED',
+        status: WithdrawalStatus.SUCCEEDED,
         lateSuccessConflict: true,
         quotaReleased: false,
         providerRefId: meta.providerRefId ?? locked.providerRefId,
@@ -570,10 +591,10 @@ export class WithdrawalLedgerService {
       .insert(financialDiscrepancies)
       .values({
         id: generateUuidV7(),
-        referenceType: 'WITHDRAWAL',
+        referenceType: DiscrepancyRefType.WITHDRAWAL,
         referenceId: locked.id,
         userId: locked.userId,
-        discrepancyType: 'LATE_SUCCESS_CONFLICT',
+        discrepancyType: DiscrepancyType.LATE_SUCCESS_CONFLICT,
         amount: totalOutflow.toString(),
         currency: ccy,
         providerPayload: {
@@ -582,7 +603,8 @@ export class WithdrawalLedgerService {
           clawback: clawback.toString(),
           shortfall: shortfall.toString(),
         },
-        status: shortfall > 0n ? 'OPEN' : 'RESOLVED',
+        status:
+          shortfall > 0n ? DiscrepancyStatus.OPEN : DiscrepancyStatus.RESOLVED,
       })
       .onConflictDoNothing({
         target: [

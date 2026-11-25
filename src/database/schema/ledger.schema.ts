@@ -11,13 +11,20 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { accounts } from './accounts.schema.js';
+import {
+  accountTypeEnum,
+  currencyEnum,
+  ledgerDirectionEnum,
+  ledgerRefTypeEnum,
+  ledgerTxTypeEnum,
+} from './enums.js';
 
 export const ledgerTransactions = pgTable(
   'ledger_transactions',
   {
     id: uuid('id').primaryKey(),
-    type: text('type').notNull(),
-    referenceType: text('reference_type').notNull(),
+    type: ledgerTxTypeEnum('type').notNull(),
+    referenceType: ledgerRefTypeEnum('reference_type').notNull(),
     referenceId: uuid('reference_id').notNull(),
     description: text('description').notNull(),
     metadata: jsonb('metadata')
@@ -29,7 +36,6 @@ export const ledgerTransactions = pgTable(
       .defaultNow(),
   },
   (t) => [
-    // Migration 0004 attaches INCLUDE (id) for index-only prior-settlement existence checks
     uniqueIndex('ledger_tx_ref_type_uq').on(
       t.referenceType,
       t.referenceId,
@@ -51,9 +57,9 @@ export const ledgerItems = pgTable(
       .notNull()
       .references(() => accounts.id),
     userId: text('user_id'),
-    accountType: text('account_type').notNull(),
-    currency: text('currency').notNull(),
-    direction: text('direction').notNull(), // 'DEBIT' | 'CREDIT'
+    accountType: accountTypeEnum('account_type').notNull(),
+    currency: currencyEnum('currency').notNull(),
+    direction: ledgerDirectionEnum('direction').notNull(),
     amount: numeric('amount', { precision: 38, scale: 0 }).notNull(),
     balanceAfter: numeric('balance_after', { precision: 38, scale: 0 }),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -61,11 +67,9 @@ export const ledgerItems = pgTable(
       .defaultNow(),
   },
   (t) => [
-    // Migration 0004 attaches INCLUDE (currency, direction, amount) for deferred commit checks
     index('ledger_items_tx_idx').on(t.transactionId),
-    // Migration 0004 attaches INCLUDE (transaction_id, currency, direction, amount, balance_after)
     index('ledger_items_user_cursor_idx')
-      .on(t.userId, t.accountType, t.id.desc())
+      .on(t.userId, t.id.desc())
       .where(sql`${t.userId} IS NOT NULL`),
   ],
 );

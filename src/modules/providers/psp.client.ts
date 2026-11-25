@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PspVerifyStatusValue } from '../../common/enums/domain.enums.js';
 import { DomainException } from '../../common/errors/domain.exception.js';
 import { ErrorCode } from '../../common/errors/error-codes.js';
 import type { EnvConfig } from '../../config/env.validation.js';
@@ -163,8 +164,8 @@ export class PspClient {
     const isVerified =
       code === 100 ||
       code === 101 ||
-      status === 'OK' ||
-      status === 'ALREADY_VERIFIED';
+      status === PspVerifyStatusValue.OK ||
+      status === PspVerifyStatusValue.ALREADY_VERIFIED;
 
     if (isVerified) {
       const converted =
@@ -183,7 +184,7 @@ export class PspClient {
       };
     }
 
-    if (code === -51 || status === 'FAILED') {
+    if (code === -51 || status === PspVerifyStatusValue.FAILED) {
       return {
         kind: 'FAILED',
         reason: message ?? 'PSP payment verification returned FAILED',

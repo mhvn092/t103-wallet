@@ -1,11 +1,15 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { DepositStatus } from '../../../common/enums/domain.enums.js';
 
 export class DepositCreateResponseDto {
   @ApiProperty({ format: 'uuid' })
   depositId!: string;
 
-  @ApiProperty({ example: 'AWAITING_PAYMENT' })
-  status!: string;
+  @ApiProperty({
+    enum: DepositStatus,
+    example: DepositStatus.AWAITING_PAYMENT,
+  })
+  status!: DepositStatus;
 
   @ApiProperty({ example: 'http://localhost:8080/psp/pay/tok_123' })
   paymentUrl!: string;
@@ -43,9 +47,9 @@ export class DepositDetailResponseDto {
   paymentUrl!: string | null;
 
   @ApiProperty({
-    enum: ['INITIATED', 'AWAITING_PAYMENT', 'VERIFYING', 'SUCCEEDED', 'FAILED'],
+    enum: DepositStatus,
   })
-  status!: string;
+  status!: DepositStatus;
 
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   expiresAt!: string | null;
@@ -67,6 +71,10 @@ export class DepositCallbackAckDto {
   @ApiProperty({ format: 'uuid', required: false })
   depositId?: string;
 
-  @ApiProperty({ example: 'SUCCEEDED', required: false })
-  status?: string;
+  @ApiProperty({
+    enum: DepositStatus,
+    example: DepositStatus.SUCCEEDED,
+    required: false,
+  })
+  status?: DepositStatus;
 }

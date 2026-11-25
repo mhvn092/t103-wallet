@@ -1,20 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsIn,
+  IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
 } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator.js';
+import { WithdrawalOpsOutcome } from '../../../common/enums/domain.enums.js';
 
 export class WithdrawalResolveDto {
   @ApiProperty({
-    enum: ['SUCCEEDED', 'FAILED'],
-    example: 'SUCCEEDED',
+    enum: WithdrawalOpsOutcome,
+    example: WithdrawalOpsOutcome.SUCCEEDED,
   })
-  @IsIn(['SUCCEEDED', 'FAILED'])
-  outcome!: 'SUCCEEDED' | 'FAILED';
+  @IsEnum(WithdrawalOpsOutcome)
+  outcome!: WithdrawalOpsOutcome;
 
   @ApiProperty({
     description: 'Audit reason for manual review resolution',

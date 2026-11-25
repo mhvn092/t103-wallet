@@ -14,6 +14,7 @@ import {
 } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+import { Currency } from '../src/common/enums/domain.enums.js';
 import { generateUuidV7 } from '../src/common/utils/uuidv7.util.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
@@ -84,7 +85,7 @@ describe('Transactional Outbox, Broker Outage Resilience & Idempotent Consumer (
     await fundUserViaAdjustment({
       app,
       userId: alice,
-      currency: 'IRT',
+      currency: Currency.IRT,
       amount: '500000',
       idempotencyKey: `fund-${faker.string.uuid()}`,
     });
@@ -95,7 +96,7 @@ describe('Transactional Outbox, Broker Outage Resilience & Idempotent Consumer (
       .send({
         fromUserId: alice,
         toUserId: bob,
-        currency: 'IRT',
+        currency: Currency.IRT,
         amount: '125000',
       })
       .expect(201);

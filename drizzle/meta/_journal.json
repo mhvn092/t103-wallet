@@ -13,42 +13,14 @@
       "idx": 1,
       "version": "7",
       "when": 1795512064970,
-      "tag": "0001_ledger_invariants_and_seed",
+      "tag": "0001_ledger_triggers",
       "breakpoints": true
     },
     {
       "idx": 2,
       "version": "7",
-      "when": 1795520000000,
-      "tag": "0002_hardening_triggers_and_leases",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1795530000000,
-      "tag": "0003_discrepancy_dedup_index",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1795540000000,
-      "tag": "0004_optimize_covering_indexes",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1795550000000,
-      "tag": "0005_ledger_item_balance_trigger_and_terminal_return",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1795560000000,
-      "tag": "0006_audit_recovery_and_scoped_keys",
+      "when": 1795512065500,
+      "tag": "0002_seed_system_accounts",
       "breakpoints": true
     }
   ]

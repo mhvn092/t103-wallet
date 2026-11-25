@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { and, asc, eq, isNull, lte, or } from 'drizzle-orm';
+import { OutboxStatus } from '../../common/enums/domain.enums.js';
 import { DatabaseService } from '../../database/database.service.js';
 import { outboxEvents } from '../../database/schema/index.js';
 import { AmqpBrokerClient } from './amqp-broker.client.js';
@@ -48,7 +49,7 @@ export class OutboxPublisherService {
         .from(outboxEvents)
         .where(
           and(
-            eq(outboxEvents.status, 'PENDING'),
+            eq(outboxEvents.status, OutboxStatus.PENDING),
             lte(outboxEvents.nextRetryAt, now),
             or(
               isNull(outboxEvents.leaseUntil),
@@ -75,7 +76,7 @@ export class OutboxPublisherService {
   ): Promise<'PUBLISHED' | 'DEFERRED' | 'SUPERSEDED'> {
     const owned = and(
       eq(outboxEvents.id, event.id),
-      eq(outboxEvents.status, 'PENDING'),
+      eq(outboxEvents.status, OutboxStatus.PENDING),
       eq(outboxEvents.leaseUntil, event.leaseUntil),
     );
     try {
@@ -87,7 +88,7 @@ export class OutboxPublisherService {
       const [saved] = await this._databaseService.db
         .update(outboxEvents)
         .set({
-          status: 'PUBLISHED',
+          status: OutboxStatus.PUBLISHED,
           publishedAt: new Date(),
           leaseUntil: null,
           lastError: null,

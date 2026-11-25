@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PayoutStatusValue } from '../../common/enums/domain.enums.js';
 
 export const payoutAcceptedSchema = z.object({
   trackingId: z.string().nullish(),
@@ -11,14 +12,7 @@ export const payoutErrorSchema = z.object({
 });
 
 export const payoutInquirySchema = z.object({
-  status: z.enum([
-    'PENDING',
-    'PROCESSING',
-    'SUCCEEDED',
-    'FAILED',
-    'RETURNED',
-    'REVERSED',
-  ]),
+  status: z.enum(PayoutStatusValue),
   trackingId: z.string().nullish(),
   refId: z.string().nullish(),
   reason: z.string().nullish(),

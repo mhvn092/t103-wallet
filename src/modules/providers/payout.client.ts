@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
-  type Currency,
-  formatMinorToApi,
-} from '../../common/utils/money.util.js';
+  Currency,
+  PayoutCurrency,
+  PayoutTransferType,
+} from '../../common/enums/domain.enums.js';
+import { formatMinorToApi } from '../../common/utils/money.util.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import {
   payoutAcceptedSchema,
@@ -39,9 +41,9 @@ export class PayoutClient {
     destination: string;
   }): Promise<PayoutCreateResult> {
     const payloadAmount =
-      params.currency === 'IRT'
+      params.currency === Currency.IRT
         ? toSafeIrrPayloadAmount(params.amountMinor * 10n)
-        : formatMinorToApi(params.amountMinor, 'USDT');
+        : formatMinorToApi(params.amountMinor, Currency.USDT);
 
     const outcome = await requestProviderJson({
       config: this._configService,
@@ -50,10 +52,16 @@ export class PayoutClient {
       method: 'POST',
       body: {
         requestId: params.requestId,
-        type: params.currency === 'IRT' ? 'IBAN' : 'CRYPTO',
+        type:
+          params.currency === Currency.IRT
+            ? PayoutTransferType.IBAN
+            : PayoutTransferType.CRYPTO,
         destination: params.destination,
         amount: payloadAmount,
-        currency: params.currency === 'IRT' ? 'IRR' : 'USDT',
+        currency:
+          params.currency === Currency.IRT
+            ? PayoutCurrency.IRR
+            : PayoutCurrency.USDT,
       },
     });
 

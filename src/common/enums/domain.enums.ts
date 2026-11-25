@@ -1,0 +1,170 @@
+export enum Currency {
+  IRT = 'IRT',
+  USDT = 'USDT',
+}
+
+export const CURRENCIES = Object.values(Currency) as [Currency, ...Currency[]];
+
+export enum AccountOwnerType {
+  USER = 'USER',
+  SYSTEM = 'SYSTEM',
+}
+
+export enum AccountType {
+  AVAILABLE = 'AVAILABLE',
+  LOCKED = 'LOCKED',
+  RECEIVABLE = 'RECEIVABLE',
+  CLEARING = 'CLEARING',
+  ADJUSTMENT = 'ADJUSTMENT',
+  REVENUE = 'REVENUE',
+}
+
+export enum UserAccountType {
+  AVAILABLE = 'AVAILABLE',
+  LOCKED = 'LOCKED',
+  RECEIVABLE = 'RECEIVABLE',
+}
+
+export enum WalletAccountFilter {
+  AVAILABLE = 'AVAILABLE',
+  LOCKED = 'LOCKED',
+  RECEIVABLE = 'RECEIVABLE',
+  ALL = 'ALL',
+}
+
+export enum SystemOwnerId {
+  PSP_CLEARING = 'PSP_CLEARING',
+  PAYOUT_CLEARING = 'PAYOUT_CLEARING',
+  OPS_ADJUSTMENT = 'OPS_ADJUSTMENT',
+  FEE_REVENUE = 'FEE_REVENUE',
+}
+
+export enum LedgerDirection {
+  DEBIT = 'DEBIT',
+  CREDIT = 'CREDIT',
+}
+
+export enum LedgerTxType {
+  DEPOSIT = 'DEPOSIT',
+  WD_HOLD = 'WD_HOLD',
+  WD_SETTLE = 'WD_SETTLE',
+  WD_RELEASE = 'WD_RELEASE',
+  WD_RETURN = 'WD_RETURN',
+  WD_LATE_SUCCESS = 'WD_LATE_SUCCESS',
+  OPS_ADJ = 'OPS_ADJ',
+  RECEIVABLE_SETTLE = 'RECEIVABLE_SETTLE',
+  TRANSFER = 'TRANSFER',
+}
+
+export enum LedgerRefType {
+  DEPOSIT = 'DEPOSIT',
+  WITHDRAWAL = 'WITHDRAWAL',
+  ADJUSTMENT = 'ADJUSTMENT',
+  TRANSFER = 'TRANSFER',
+}
+
+export enum IdempotencyStatus {
+  IN_PROGRESS = 'IN_PROGRESS',
+  COMPLETED = 'COMPLETED',
+}
+
+export enum DepositStatus {
+  INITIATED = 'INITIATED',
+  AWAITING_PAYMENT = 'AWAITING_PAYMENT',
+  VERIFYING = 'VERIFYING',
+  SUCCEEDED = 'SUCCEEDED',
+  FAILED = 'FAILED',
+}
+
+export enum WithdrawalStatus {
+  PENDING_DISPATCH = 'PENDING_DISPATCH',
+  DISPATCHING = 'DISPATCHING',
+  PROCESSING = 'PROCESSING',
+  SUCCEEDED = 'SUCCEEDED',
+  FAILED = 'FAILED',
+  MANUAL_REVIEW = 'MANUAL_REVIEW',
+}
+
+export enum WithdrawalOpsOutcome {
+  SUCCEEDED = 'SUCCEEDED',
+  FAILED = 'FAILED',
+}
+
+export enum WithdrawalFailureReason {
+  CANCELLED_BY_USER = 'CANCELLED_BY_USER',
+  BANK_RETURNED = 'BANK_RETURNED',
+  PROVIDER_FAILED = 'PROVIDER_FAILED',
+}
+
+export enum DiscrepancyRefType {
+  DEPOSIT = 'DEPOSIT',
+  WITHDRAWAL = 'WITHDRAWAL',
+}
+
+export enum DiscrepancyType {
+  AMOUNT_MISMATCH = 'AMOUNT_MISMATCH',
+  ORDER_ID_MISMATCH = 'ORDER_ID_MISMATCH',
+  VERIFIED_AMOUNT_OUT_OF_RANGE = 'VERIFIED_AMOUNT_OUT_OF_RANGE',
+  DEPOSIT_OVERPAYMENT = 'DEPOSIT_OVERPAYMENT',
+  PSP_REFERENCE_REUSED = 'PSP_REFERENCE_REUSED',
+  PAYOUT_PAYLOAD_MISMATCH = 'PAYOUT_PAYLOAD_MISMATCH',
+  LATE_SUCCESS_VERIFICATION = 'LATE_SUCCESS_VERIFICATION',
+  LATE_SUCCESS_CONFLICT = 'LATE_SUCCESS_CONFLICT',
+}
+
+export enum DiscrepancyStatus {
+  OPEN = 'OPEN',
+  RESOLVED = 'RESOLVED',
+}
+
+export enum OutboxEventType {
+  BALANCE_CHANGED = 'BALANCE_CHANGED',
+}
+
+export enum OutboxStatus {
+  PENDING = 'PENDING',
+  PUBLISHED = 'PUBLISHED',
+}
+
+export enum PspStatusValue {
+  INIT = 'INIT',
+  PAID = 'PAID',
+  VERIFIED = 'VERIFIED',
+  FAILED = 'FAILED',
+  EXPIRED = 'EXPIRED',
+}
+
+export enum PspVerifyStatusValue {
+  OK = 'OK',
+  ALREADY_VERIFIED = 'ALREADY_VERIFIED',
+  FAILED = 'FAILED',
+}
+
+export enum PayoutStatusValue {
+  PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
+  SUCCEEDED = 'SUCCEEDED',
+  FAILED = 'FAILED',
+  RETURNED = 'RETURNED',
+  REVERSED = 'REVERSED',
+}
+
+export enum PayoutTransferType {
+  IBAN = 'IBAN',
+  CRYPTO = 'CRYPTO',
+}
+
+export enum PayoutCurrency {
+  IRR = 'IRR',
+  USDT = 'USDT',
+}
+
+export enum ReconciliationMismatchType {
+  MISSING_IN_LOCAL = 'MISSING_IN_LOCAL',
+  MISSING_IN_CSV = 'MISSING_IN_CSV',
+  AMOUNT_MISMATCH = 'AMOUNT_MISMATCH',
+}
+
+export enum ReconciliationAdjacentMatchType {
+  MATCHED_ADJACENT_DAY = 'MATCHED_ADJACENT_DAY',
+}

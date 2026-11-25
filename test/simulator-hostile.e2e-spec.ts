@@ -8,6 +8,7 @@ import type { App } from 'supertest/types.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+import { Currency } from '../src/common/enums/domain.enums.js';
 import { generateUuidV7 } from '../src/common/utils/uuidv7.util.js';
 import type { EnvConfig } from '../src/config/env.validation.js';
 import { DatabaseService } from '../src/database/database.service.js';
@@ -184,7 +185,7 @@ describe.runIf(IS_LIVE)(
         .send({
           fromUserId: userA,
           toUserId: userB,
-          currency: 'IRT',
+          currency: Currency.IRT,
           amount: '25000',
         })
         .expect(201);
@@ -192,14 +193,14 @@ describe.runIf(IS_LIVE)(
       await fundUserViaAdjustment({
         app,
         userId: userA,
-        currency: 'IRT',
+        currency: Currency.IRT,
         amount: '2000000',
         idempotencyKey: `hostile-fund-irt-${faker.string.uuid()}`,
       });
       await fundUserViaAdjustment({
         app,
         userId: userA,
-        currency: 'USDT',
+        currency: Currency.USDT,
         amount: '50',
         idempotencyKey: `hostile-fund-usdt-${faker.string.uuid()}`,
       });
@@ -212,7 +213,7 @@ describe.runIf(IS_LIVE)(
           .set('Idempotency-Key', `hostile-wd-irt-${i}-${faker.string.uuid()}`)
           .send({
             userId: userA,
-            currency: 'IRT',
+            currency: Currency.IRT,
             amount: '150000',
             destination: VALID_IBAN,
           })
@@ -226,7 +227,7 @@ describe.runIf(IS_LIVE)(
           .set('Idempotency-Key', `hostile-wd-usdt-${i}-${faker.string.uuid()}`)
           .send({
             userId: userA,
-            currency: 'USDT',
+            currency: Currency.USDT,
             amount: '10.5',
             destination: VALID_TRC20,
           })

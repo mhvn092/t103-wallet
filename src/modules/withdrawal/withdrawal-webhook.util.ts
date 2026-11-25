@@ -1,4 +1,4 @@
-import type { Currency } from '../../common/utils/money.util.js';
+import { Currency, PayoutCurrency } from '../../common/enums/domain.enums.js';
 import { isWebhookAmountValid } from './withdrawal.mapper.js';
 import type { WithdrawalEntity } from './withdrawal.types.js';
 
@@ -13,14 +13,16 @@ export function detectProviderPayloadMismatch(
     return false;
   }
 
-  const expectedCurrency: Currency = row.currency === 'USDT' ? 'USDT' : 'IRT';
+  const expectedCurrency = row.currency;
   const expectedMinor = BigInt(row.amount);
   const normCcy = payload.currency?.trim().toUpperCase();
 
   const currencyMismatch = Boolean(
     normCcy &&
-    ((expectedCurrency === 'IRT' && normCcy !== 'IRR' && normCcy !== 'IRT') ||
-      (expectedCurrency === 'USDT' && normCcy !== 'USDT')),
+    ((expectedCurrency === Currency.IRT &&
+      normCcy !== PayoutCurrency.IRR &&
+      normCcy !== Currency.IRT) ||
+      (expectedCurrency === Currency.USDT && normCcy !== PayoutCurrency.USDT)),
   );
 
   const amountMismatch =

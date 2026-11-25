@@ -14,10 +14,19 @@ import {
 } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { configureApp } from '../src/app.setup.js';
+import {
+  AccountOwnerType,
+  AccountType,
+  Currency,
+  LedgerDirection,
+  LedgerRefType,
+  LedgerTxType,
+} from '../src/common/enums/domain.enums.js';
 import { generateUuidV7 } from '../src/common/utils/uuidv7.util.js';
 import { DatabaseService } from '../src/database/database.service.js';
 import { runMigrations } from '../src/database/migrate.js';
 import { RetentionWorker } from '../src/modules/idempotency/retention.worker.js';
+import { LedgerService } from '../src/modules/ledger/ledger.service.js';
 import {
   getRequiredTestDatabaseUri,
   prepareTestEnv,
@@ -98,7 +107,8 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
     ).resolves.toHaveLength(6);
   });
 
-  it('rejects unbalanced or cross-currency ledger transactions at COMMIT', async () => {
+  it('rejects unbalanced or cross-currency postings in LedgerService before writing to DB', async () => {
+    const ledgerService = app.get(LedgerService);
     const u1 = generateUuidV7();
     const userId = `user_${faker.string.alphanumeric(8)}`;
     await database.pool.query(
@@ -107,61 +117,49 @@ describe('Core Ledger Invariants, Wallets, Idempotency & Ops Adjustments (Integr
       [u1, userId],
     );
 
-    const client = await database.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const txId = generateUuidV7();
-      await client.query(
-        `INSERT INTO ledger_transactions (id, type, reference_type, reference_id, description)
-         VALUES ($1, 'OPS_ADJ', 'ADJUSTMENT', $2, 'bad cross ccy')`,
-        [txId, generateUuidV7()],
-      );
-      await client.query(
-        `INSERT INTO ledger_items (transaction_id, account_id, user_id, account_type, currency, direction, amount)
-         VALUES ($1, '01900000-0000-7000-8000-000000000003', NULL, 'ADJUSTMENT', 'IRT', 'DEBIT', 1000)`,
-        [txId],
-      );
-      await client.query(
-        `INSERT INTO ledger_items (transaction_id, account_id, user_id, account_type, currency, direction, amount)
-         VALUES ($1, $2, $3, 'AVAILABLE', 'USDT', 'CREDIT', 1000)`,
-        [txId, u1, userId],
-      );
-      await expect(client.query('COMMIT')).rejects.toThrow(/unbalanced/);
-    } finally {
-      await client.query('ROLLBACK').catch(() => {});
-      client.release();
-    }
+    const sysAccount = {
+      id: '01900000-0000-7000-8000-000000000003',
+      ownerType: AccountOwnerType.SYSTEM,
+      ownerId: 'OPS_ADJUSTMENT',
+      currency: Currency.IRT,
+      accountType: AccountType.ADJUSTMENT,
+      normalSide: LedgerDirection.DEBIT,
+      balance: null,
+      createdAt: new Date(),
+    };
+    const userAccount = {
+      id: u1,
+      ownerType: AccountOwnerType.USER,
+      ownerId: userId,
+      currency: Currency.USDT,
+      accountType: AccountType.AVAILABLE,
+      normalSide: LedgerDirection.CREDIT,
+      balance: '0',
+      createdAt: new Date(),
+    };
 
-    // F-04: Attempting to dequeue trg_ledger_tx_assert_balanced via SET CONSTRAINTS IMMEDIATE mid-TX must still be blocked by trg_ledger_item_assert_balanced
-    const cBypass = await database.pool.connect();
-    try {
-      await cBypass.query('BEGIN');
-      const bypassTxId = generateUuidV7();
-      await cBypass.query(
-        `INSERT INTO ledger_transactions (id, type, reference_type, reference_id, description)
-         VALUES ($1, 'OPS_ADJ', 'ADJUSTMENT', $2, 'set constraints immediate bypass attempt')`,
-        [bypassTxId, generateUuidV7()],
-      );
-      await cBypass.query(
-        `INSERT INTO ledger_items (transaction_id, account_id, user_id, account_type, currency, direction, amount)
-         VALUES
-           ($1, '01900000-0000-7000-8000-000000000004', NULL, 'ADJUSTMENT', 'USDT', 'DEBIT', 1),
-           ($1, $2, $3, 'AVAILABLE', 'USDT', 'CREDIT', 1)`,
-        [bypassTxId, u1, userId],
-      );
-      await cBypass.query(
-        `SET CONSTRAINTS trg_ledger_tx_assert_balanced IMMEDIATE`,
-      );
-      await cBypass.query(
-        `INSERT INTO ledger_items (transaction_id, account_id, user_id, account_type, currency, direction, amount)
-         VALUES ($1, $2, $3, 'AVAILABLE', 'USDT', 'CREDIT', 999999999)`,
-        [bypassTxId, u1, userId],
-      );
-      await expect(cBypass.query('COMMIT')).rejects.toThrow(/unbalanced/);
-    } finally {
-      await cBypass.query('ROLLBACK').catch(() => {});
-      cBypass.release();
-    }
+    await expect(
+      database.runInTransaction((tx) =>
+        ledgerService.postTransaction(tx, {
+          type: LedgerTxType.OPS_ADJ,
+          referenceType: LedgerRefType.ADJUSTMENT,
+          referenceId: generateUuidV7(),
+          description: 'bad cross ccy',
+          postings: [
+            {
+              account: sysAccount,
+              direction: LedgerDirection.DEBIT,
+              amount: 1000n,
+            },
+            {
+              account: userAccount,
+              direction: LedgerDirection.CREDIT,
+              amount: 1000n,
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/Unbalanced postings/);
   });
 
   it('rejects negative USER AVAILABLE balances and post-commit item appends', async () => {

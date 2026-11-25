@@ -1,21 +1,13 @@
-import type { Currency } from '../../common/utils/money.util.js';
+import {
+  AccountType,
+  Currency,
+  LedgerDirection,
+  LedgerRefType,
+  LedgerTxType,
+} from '../../common/enums/domain.enums.js';
 import type { AccountEntity } from '../../database/schema/index.js';
 
-export type LedgerTxType =
-  | 'DEPOSIT'
-  | 'WD_HOLD'
-  | 'WD_SETTLE'
-  | 'WD_RELEASE'
-  | 'WD_RETURN'
-  | 'WD_LATE_SUCCESS'
-  | 'OPS_ADJ'
-  | 'RECEIVABLE_SETTLE'
-  | 'TRANSFER';
-
-export type LedgerRefType =
-  'DEPOSIT' | 'WITHDRAWAL' | 'ADJUSTMENT' | 'TRANSFER';
-
-export type LedgerDirection = 'DEBIT' | 'CREDIT';
+export { LedgerDirection, LedgerRefType, LedgerTxType };
 
 export interface LedgerPostingLine {
   account: AccountEntity;
@@ -39,7 +31,7 @@ export interface PostLedgerTxResult {
     accountId: string;
     userId: string | null;
     currency: Currency;
-    accountType: string;
+    accountType: AccountType;
     direction: LedgerDirection;
     amount: bigint;
     balanceAfter: bigint | null;

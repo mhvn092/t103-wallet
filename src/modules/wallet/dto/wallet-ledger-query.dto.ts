@@ -10,6 +10,7 @@ import {
   ValidatorConstraint,
   type ValidatorConstraintInterface,
 } from 'class-validator';
+import { WalletAccountFilter } from '../../../common/enums/domain.enums.js';
 import { CURRENCIES, type Currency } from '../../../common/utils/money.util.js';
 import { emptyToUndefined } from '../../../common/utils/string-normalizer.util.js';
 import {
@@ -17,7 +18,6 @@ import {
   isValidPositiveBigIntCursor,
   parseStrictLimit,
 } from '../wallet-ledger-query.util.js';
-import type { UserAccountType } from '../wallet.types.js';
 
 @ValidatorConstraint({ name: 'positiveBigIntCursor', async: false })
 class PositiveBigIntCursorConstraint implements ValidatorConstraintInterface {
@@ -54,13 +54,13 @@ export class WalletLedgerQueryDto {
 
   @ApiPropertyOptional({
     enum: WALLET_ACCOUNT_FILTERS,
-    default: 'ALL',
+    default: WalletAccountFilter.ALL,
   })
-  @Transform(({ value }) => emptyToUndefined(value) ?? 'ALL')
+  @Transform(({ value }) => emptyToUndefined(value) ?? WalletAccountFilter.ALL)
   @IsIn(WALLET_ACCOUNT_FILTERS, {
     message: 'accountType must be AVAILABLE, LOCKED, RECEIVABLE, or ALL',
   })
-  accountType: UserAccountType | 'ALL' = 'ALL';
+  accountType: WalletAccountFilter = WalletAccountFilter.ALL;
 
   @ApiPropertyOptional({ enum: CURRENCIES })
   @Transform(({ value }) => emptyToUndefined(value))
